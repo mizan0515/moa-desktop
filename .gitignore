@@ -1,0 +1,27 @@
+# Claude Code session metadata
+.claude-handoff.md
+.claude-handoff-*.md
+
+# Build artifacts (future)
+node_modules/
+dist/
+build/
+target/
+src-tauri/target/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Secrets (never commit)
+.env
+.env.*
+*.pem
+*.key
+auth.json
+credentials.json
