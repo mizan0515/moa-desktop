@@ -42,7 +42,13 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 
 ### F6. 누락된 운영 항목 추가
 - **Recovery journal**: session 별 JSONL journal (phase, owner, PID, base hashes, patch path) — crash 후 startup reconcile
-- **Multi-instance**: 단일 instance app (Tauri single-instance plugin) 또는 repo-scoped OS file lock
+- **Multi-instance / Multi-project**: 단일 앱 인스턴스 (Tauri single-instance plugin) + 최상위 프로젝트 탭 바 (Codex/Claude Desktop 패턴). 한 인스턴스 안 N 프로젝트 동시 활성, 탭 전환으로 컨텍스트 스왑.
+  - **같은 repo 중복 차단 = 2-layer lock**:
+    1. **In-memory repo-path lock** (앱 안 N 탭 사이) — lock manager 가 path canonicalize (case fold, symlink/junction/UNC 정규화) 후 in-memory map.
+    2. **OS-level named mutex / lock file** (프로세스 경계) — Tauri single-instance plugin 이 Win11 24H2 등에서 실패해도 mutation safety 보장. global app-identity mutex 1 개 + per-repo named mutex N 개. stale detection (PID 사망 감지 후 cleanup).
+  - **Lock ordering contract** (deadlock 방지): `repo-open canonical lock → project lock → session/lane mutation lock → journal append queue`. lane mutation lock 보유 중 다른 project lock 획득 **금지**. cross-project 작업 (T11 multi-project 시나리오) 은 canonical path 또는 projectId 정렬 기반 2-phase `try_acquire_all`, 실패 시 전부 release + retry/stop. **worker output 은 절대 lock acquisition command source 가 될 수 없음** — scheduler 만 project/lane lock 잡음.
+  - **N 인스턴스 모델 정책**: primary architecture 로는 reject (settings/단축키/telemetry fragmentation), 단 **safe-mode escape hatch** 로 `--user-data-dir <path>` flag 보존 — crash isolation/debug/profile 분리가 필요한 사용자가 N 인스턴스로 띄울 수 있음. mutation safety 는 위 OS-level mutex 가 보장.
+  - **Single-app crash isolation 흡수책** (lane supervisor): 한 lane panic 이 앱 전체를 죽이지 않도록 T7-full 에 panic boundary + lane supervisor (lane 별 task 격리, panic 감지 후 lane 만 fail, 다른 lane 영향 0).
 - **Error 분류**: `cli-missing | auth-expired | quota | network | sandbox-denied | malformed-json | timeout | oom | killed | test-fail` typed errors → UI 에서 사용자 행동 가능한 메시지
 - **Retry tracking**: LLM 비결정성 — 재시도는 새 attempt 로 기록 (prompt hash, argv, model, CLI version, cwd, env allowlist, raw output, attempt#)
 - **Prompt cache awareness**: 매 `claude -p` 가 fresh session = cache reuse 0. 비용 multiplier 명시. 사용자에 표시.
@@ -133,6 +139,17 @@ F5 의 S1-S8 검증. 통과 못하면 Phase 1 진입 금지.
 - UI wireframe 사용자 confirm
 - README, dry-run 데모 영상 또는 GIF
 
+### Phase 6 (v1.5) — Multi-ticket / Multi-project (T10, T11, T12 → 1.5-2주)
+**비전 충족 단계**: 글로벌 `/병행티켓` + `/병행통합` 등가 + Codex/Claude Desktop 동등 multi-project.
+- T10: Ticket Decomposer — 큰 작업 입력 → 양측 MoA first-pass 로 충돌 없는 N 티켓 + paste-ready prompt + 의존성 그래프 + 머지 순서 emit. UI 에 "Decompose" 버튼 + TicketBoard 컴포넌트.
+- T11: Parallel Session Runner — 티켓 N 개 → worktree pool N → 각 lane 이 독립 T7-full orchestrator instance. UI 에 ParallelLanes (N 개 lane 동시 표시). 사용자가 각 lane "Run" 클릭 (자동 실행 X — 자원 폭주 방지).
+  - **Resource budget** (필수): global `max_live_workers` (default 4), per-project `max_lanes` (default 2), bounded ring buffer for worker output (default 1MB) + disk spill, hidden tab idle throttling, RSS watchdog. tab close 가 React state + Rust `ProjectHandle/SessionHandle` drop + process abort + journal handle close + lock release 모두 수행 (drop test 필수).
+  - **Lock ordering 준수**: § F6 의 contract 따름. cross-project 작업 시 `try_acquire_all` 2-phase, 실패 시 전부 release.
+- T12: Merge Integrator — 모든 lane 완료 후 머지 순서대로 patch apply → 충돌 시 stop + 한국어 보고. 성공 시 worktree 정리.
+- **Multi-project 활성화**: T1 의 single-instance + tab 인프라 + T4 의 OS-level mutex 인프라가 이미 깔려 있다는 가정 하에 본 phase 에서 lock manager 를 repo-path scoped 로 확장. per-project journal/telemetry 격리는 T1/T4/T9 가 Phase 1/3/4 시점부터 project-id 를 키로 받도록 미리 설계 (Phase 6 backtrack 방지).
+
+**Phase 6 진입 전 체크**: T1 가 상단 프로젝트 탭 바 + tabRegistry 패턴을 포함했는가, T4 lock 이 project-id 키로 분리됐는가, T9 telemetry 가 project-scoped 인가. 셋 중 하나라도 누락이면 backtrack 비용 큼 — **T1/T4/T9 ticket 본문을 본 결정에 맞춰 amend 필요** (다음 단계).
+
 ## 2. Ticket dependency graph (value-incremental)
 
 ```
@@ -172,5 +189,19 @@ T0 (spike) ── 통과 후 Phase 1 진입
 | T4 | 3 | `src-tauri/src/safety/*`, `src-tauri/src/git/worktree.rs`, `src-tauri/src/lock/*`, `src-tauri/src/journal/*` | T2 | — (T2 만) |
 | T7-full | 3 | `src-tauri/src/orchestrator/*` (dryRun 제외), `src/lib/orchestrator/stateMachine.ts` | T2, T3, T4, T5a, T5b | T2, T3, T4, T5a, T5b |
 | T9 | 4 | `src-tauri/src/telemetry/*`, `src/components/CostMeter.tsx`, `src-tauri/src/cancel/*` | T2 | T2 |
+| **T10** | 6 | `src-tauri/src/decomposer/*`, `prompts/decomposer.txt`, `src/components/TicketBoard.tsx` | T7-full, T5a, T5b | T7-full |
+| **T11** | 6 | `src-tauri/src/parallel/*`, `src-tauri/src/parallel/worktree_pool.rs`, `src/components/ParallelLanes.tsx` | T4 (worktree.rs API), T7-full, T9 | T4, T7-full, T9 |
+| **T12** | 6 | `src-tauri/src/integrator/*`, `src/components/IntegratePanel.tsx` | T4 (patch apply), T11 | T11 |
 
 **병렬 가능한 첫 스프린트** (T0 통과 후): T1, T8, T2 (3 worker 동시 가능). T6, T7-thin 는 T8 schema 합의 후.
+
+**Phase 6 ticket 들 사이 병렬 가능성**: T10 단독 → T11 단독 → T12 (T11 의존). T11/T12 는 직렬.
+
+## 4. T1/T4/T9 amend 필요 사항 (Phase 6 backtrack 방지)
+v1 ticket 본문에 multi-project 인프라 hook 미리 박아둔다:
+
+- **T1**: 상단 프로젝트 탭 바 컴포넌트 + `tabRegistry` 패턴 (T10/T11/T12 가 App.tsx 수정 없이 탭 등록 가능). 첫 v1 출시에는 탭 1개 (현재 프로젝트) 만 활성, multi 는 v1.5 에서 enable.
+- **T4**: `LockManager` API 가 `(projectId, lockKey)` 키로 받음. v1 에서는 projectId 가 항상 단일이지만 인터페이스만 미리. `journal` 도 per-project subdir.
+- **T9**: `Telemetry` 가 project-scoped aggregation. CostMeter UI 가 현재 탭 프로젝트의 cost 만 표시 (전역 합산 별도 탭).
+
+위 amend 는 v1 출시 일정에 영향 0 (모두 인터페이스 디자인 디테일, 구현 추가 코드 한 자리수 줄). T1 는 현재 in-flight (`feat/T1-scaffold`) 이므로 본 결정 즉시 T1 ticket 본문에 반영 필요.

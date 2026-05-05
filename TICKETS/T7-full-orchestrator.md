@@ -30,6 +30,7 @@ T3, T4, T5a, T5b 통과 후. worktree: T7full-orch.
 - [ ] max 3 round, 초과 시 사용자 escalation
 - [ ] T7-thin (dryRun) path 와 통합: settings.mockMode → T8 mock runner 로 swap, 같은 state machine 재사용
 - [ ] integration test: small task end-to-end (mock Workers 로) + small real task (사용자 confirm 후)
+- [ ] **Lane supervisor + panic boundary** (Phase 6 multi-project crash isolation 흡수책): 각 lane orchestrator instance 를 격리된 Tokio task 로 spawn, panic 감지 시 해당 lane 만 fail (다른 lane/UI 영향 0). lane drop 시 child process abort + lock release + journal close 의무. unit test: `lane_panic_does_not_kill_app`
 
 ## Files owned
 - `src-tauri/src/orchestrator/{mod.rs,state.rs,flow.rs,adversarial.rs,verify.rs}` (단 dryrun.rs 는 T7-thin 영역, T7-full 이 import 만)

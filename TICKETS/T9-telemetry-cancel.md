@@ -26,12 +26,13 @@ T2 통과 후 (Phase 4). worktree: T9-telemetry.
 ## Success criteria
 - [ ] `src-tauri/src/telemetry/{counter.rs,cost.rs,version.rs,mod.rs}` — token counter, cost calculator, CLI version snapshot
 - [ ] `src-tauri/src/cancel/{tree_kill.rs,mod.rs}` — process tree kill (T2 의 abort 와 통합)
-- [ ] `src/components/CostMeter.tsx` — running token + $ 표시, cap 도달 시 warning banner
+- [ ] **Telemetry aggregation 키 = `(projectId, sessionId)`** — v1 single-project 에서도 인터페이스만 미리. Phase 6 multi-project 진입 시 backtrack 0
+- [ ] `src/components/CostMeter.tsx` — **현재 활성 탭 프로젝트의 cost** 표시 (projectContext 에서 projectId 받아 telemetry filter), cap 도달 시 warning banner. 별도 "All projects" 토글로 전체 합산도 보기
 - [ ] `src/components/ErrorBanner.tsx` — T2 error enum 별 actionable 메시지
 - [ ] `src/components/VersionDriftWarning.tsx` — version drift 시 dismissible warning
-- [ ] cost cap setting (default $10/session) — 도달 시 사용자 confirm 없이 진행 안 함
+- [ ] **cost cap setting per-project + global** (default per-project $10/session, global $30/day) — 둘 중 하나 도달 시 사용자 confirm 없이 진행 안 함
 - [ ] cache_read 가 0 인 게 정상임을 사용자 안내 (fresh session 매번)
-- [ ] unit + UI test
+- [ ] unit + UI test (project-scoped aggregation 검증 포함)
 
 ## Files owned
 - `src-tauri/src/telemetry/*.rs`
