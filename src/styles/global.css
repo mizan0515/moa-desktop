@@ -1,0 +1,61 @@
+:root {
+  color-scheme: dark;
+  --bg-0: #1a1b1e;
+  --bg-1: #232428;
+  --bg-2: #2b2d31;
+  --border: #3a3c42;
+  --fg-0: #e7e8ea;
+  --fg-1: #b6b8bd;
+  --fg-2: #7d8088;
+  --accent: #5eb3ff;
+  --accent-dim: #2c5a85;
+  --warn: #ffb454;
+  --error: #ff6b6b;
+  --ok: #65d18a;
+  --mono: ui-monospace, "Cascadia Mono", "Consolas", "Menlo", monospace;
+  --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--fg-0);
+  background: var(--bg-0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+input, textarea, select {
+  font: inherit;
+  color: var(--fg-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+textarea {
+  font-family: var(--mono);
+  resize: vertical;
+}

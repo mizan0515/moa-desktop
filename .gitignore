@@ -2,13 +2,16 @@
 .claude-handoff.md
 .claude-handoff-*.md
 
-# Build artifacts (future)
+# Build artifacts
 node_modules/
 dist/
+dist-ssr/
 build/
 target/
 src-tauri/target/
+src-tauri/gen/schemas/
 *.log
+*.local
 
 # IDE
 .vscode/
