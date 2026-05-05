@@ -65,11 +65,13 @@ Windows shell, sandbox, 대량 mechanical edit. Codex가 작성, Claude가 spot 
 
 ## UI
 - 첫 화면 = workbench (랜딩 페이지 금지)
-- 왼쪽: 프로젝트/세션
+- **상단: 프로젝트 탭 바** (Codex/Claude Desktop 패턴 — 한 앱 인스턴스에 N 프로젝트 동시 활성, 탭 전환으로 컨텍스트 스왑)
+- 왼쪽: 현재 탭 프로젝트의 세션/lane 리스트
 - 가운데: 작업 입력 + 자동 실행 상태 (preflight → first-pass → synthesis → adversarial → mutation → verification → final)
 - 오른쪽: 5칸 synthesis + 충돌 + 결론
 - 아래: Claude/Codex lane 별 로그 타임라인
 - 좁은 폭 지원, 카드 중첩 금지
+- 프로젝트 탭별 lock/journal/telemetry 격리, 같은 repo 가 두 탭에 중복 열림 금지 (repo-path scoped lock)
 
 ## Worker Guard (system-append)
 
@@ -163,9 +165,14 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true
 ## First-version scope (out)
 - GitHub issue/PR 자동화
 - 장기 백그라운드 큐
-- 다중 프로젝트 동시 실행
 - cloud sync
 - 무인 push, main 직접 push
+
+## v1.5 scope (decomposer + parallel + integrator + multi-project)
+- 작업 분해기 (`/병행티켓` 등가, T10): 큰 작업 → 충돌 없는 N 티켓 + paste-ready prompt + 의존성 그래프 + 머지 순서
+- 다중 세션 병렬 실행 (T11): 한 프로젝트 안 N 티켓 동시 lane (worktree pool, 각 lane = 독립 T7-full orchestrator instance)
+- 머지 통합기 (`/병행통합` 등가, T12): 머지 순서대로 patch apply → 충돌 시 stop + 한국어 보고
+- **다중 프로젝트 동시** (단일 앱 인스턴스 + 최상위 프로젝트 탭, Codex/Claude Desktop 패턴): repo-scoped lock manager, per-project settings/journal/telemetry, 한 프로젝트는 한 탭에서만 활성
 
 ## Implementation steps (사용자 제시)
 1. Tauri + React + TS scaffold

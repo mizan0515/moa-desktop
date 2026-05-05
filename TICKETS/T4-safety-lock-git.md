@@ -18,20 +18,24 @@ T2 통과 후 (T5a/T5b 와 병렬 가능 — 다른 폴더). worktree: T4-safety
 ## Goal
 Mutation 안전 인프라:
 1. **Worktree-isolated patch flow** — Worker 가 직접 source 안 만지고 임시 worktree 에서 작업, app 이 patch 추출 → 검증 → apply 또는 reject
-2. **Mutation lock manager** — 1 session 당 1 owner. transfer 가능 (lock acquire/release/transfer + audit log)
-3. **Recovery journal** — phase, owner, PID, base hashes, patch path JSONL. crash 후 startup reconcile
-4. **Multi-instance lock** — repo 단위 OS file lock (두 번째 MoA Desktop instance 가 같은 repo 작업 시 거부)
+2. **2-layer lock manager** — (a) in-memory `LockManager` API `(projectId, lockKey)` for in-app N-tab safety + (b) **OS-level named mutex / lock file** for cross-process safety (Tauri single-instance plugin 이 Win11 24H2 등에서 실패해도 mutation safety 보장). 1 session 당 1 owner, transfer 가능.
+3. **Recovery journal** — phase, owner, PID, base hashes, patch path JSONL. crash 후 startup reconcile. **Durability policy** 명시 (아래 success criteria).
+4. **Repo-path canonicalization** — case fold, symlink, junction, UNC path 정규화 → 동일 repo 가 다른 path 표기로 두 탭에 열리는 것 차단.
 5. **File hash snapshot/diff** — Worker turn 전후 hash 비교
+6. **Lock ordering contract** — `repo-open canonical lock → project lock → session/lane mutation lock → journal append queue`. lane lock 보유 중 다른 project lock 획득 금지. cross-project 작업 (T11) 은 path/projectId 정렬 기반 2-phase `try_acquire_all` + retry. worker output 은 lock acquisition source 가 될 수 없음 (scheduler 만).
 
 ## Success criteria
 - [ ] `git worktree add` 으로 임시 worktree 생성, Worker 종료 시 `git worktree remove`
 - [ ] patch 추출 (`git -C <worktree> diff` 또는 `format-patch`) → in-memory + 파일 저장
 - [ ] patch apply (`git apply --check` → `git apply`) — 실패 시 reject
-- [ ] lock state machine: idle → acquired(claude|codex) → transferring → acquired(other) → released. transfer 시 audit log
-- [ ] journal: per-session JSONL append-only. 각 entry = `{phase, owner, pid, ts, base_hashes, patch_path}`. startup 시 마지막 미완료 entry 발견하면 사용자에 reconcile 옵션 (cleanup / resume)
-- [ ] multi-instance: `~/.moa-desktop/locks/<repo-hash>.lock` (또는 Tauri appDataDir) — flock/exclusive open. 두 번째 instance 거부
+- [ ] **lock manager API 가 `(projectId, lockKey)` 키로 받음** — v1 single-project 에서도 인터페이스만 미리 (Phase 6 multi-project 진입 시 backtrack 0). state machine: idle → acquired(claude|codex) → transferring → acquired(other) → released. transfer 시 audit log
+- [ ] **Lock ordering contract 구현 + 검증**: `repo-open canonical lock → project lock → session/lane mutation lock → journal append queue` 순서. lane mutation lock 보유 중 다른 project lock 획득 시도 = 컴파일 타임 또는 런타임 panic. cross-project 는 정렬 기반 `try_acquire_all` (전부 또는 전무). worker output → lock command 변환 경로 차단 (스케줄러만 lock).
+- [ ] **OS-level named mutex / lock file fallback**: Tauri plugin 실패 또는 사용자가 `--user-data-dir` 로 의도적 N 인스턴스 띄움 시에도 동일 repo 동시 mutation 차단. `~/.moa-desktop/locks/<repo-canonical-hash>.lock` (Windows: named mutex `Global\moa-desktop-<hash>`, Unix: flock). stale detection (lock holder PID 사망 시 cleanup).
+- [ ] **Repo path canonicalization**: case fold, symlink resolve, junction resolve, UNC normalize. `D:\repo`, `d:\repo`, `\\?\D:\repo`, junction → 같은 canonical key.
+- [ ] journal: **per-(projectId, sessionId) JSONL append-only** — 디렉토리 구조 `~/.moa-desktop/journals/<projectId>/<sessionId>.jsonl`. 각 entry = `{phase, owner, pid, ts, base_hashes, patch_path}`. startup 시 마지막 미완료 entry 발견하면 사용자에 reconcile 옵션 (cleanup / resume).
+- [ ] **Journal durability policy**: session 시작 시 file pre-create + handle 유지, append 는 per-session single writer channel 로 직렬화, **mutation lock 밖에서 flush** (lock starvation 방지). critical phase transition 에만 bounded/batched `sync_all`. **reconcile 은 "마지막 entry 유실 가능" 을 정상 케이스로** 처리 — worktree/patch dir scan 결과와 결합해 truth 결정. OneDrive/Defender 경로 감지 시 사용자 경고.
 - [ ] file hash: SHA-256 snapshot. transfer 시점에 hash 미스매치 = error
-- [ ] unit test: worktree create/apply/reject, lock acquire/transfer/release, journal reconcile, multi-instance refusal, hash mismatch
+- [ ] unit test: worktree create/apply/reject, lock acquire/transfer/release (per project key), **lock ordering deadlock test**, **OS-level mutex second-process refusal**, **repo path canonicalization (case/symlink/junction/UNC)**, **journal parallel flush latency + crash reconcile**, hash mismatch
 
 ## Files owned
 - `src-tauri/src/safety/*.rs` (mod.rs body 포함)
