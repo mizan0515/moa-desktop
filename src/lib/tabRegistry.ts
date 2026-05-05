@@ -11,8 +11,14 @@ export interface TabEntry {
 
 const registry = new Map<TabId, TabEntry>();
 const listeners = new Set<() => void>();
+let cachedSnapshot: TabEntry[] = [];
+
+function rebuildSnapshot() {
+  cachedSnapshot = Array.from(registry.values()).sort((a, b) => a.order - b.order);
+}
 
 function emit() {
+  rebuildSnapshot();
   listeners.forEach((fn) => fn());
 }
 
@@ -27,14 +33,16 @@ export function unregisterTab(id: TabId): void {
 }
 
 export function listTabs(): TabEntry[] {
-  return Array.from(registry.values()).sort((a, b) => a.order - b.order);
+  return cachedSnapshot;
 }
 
 export function subscribe(fn: () => void): () => void {
   listeners.add(fn);
-  return () => listeners.delete(fn);
+  return () => {
+    listeners.delete(fn);
+  };
 }
 
 export function getSnapshot(): TabEntry[] {
-  return listTabs();
+  return cachedSnapshot;
 }
