@@ -10,6 +10,8 @@
 
 export type ProcessErrorKind =
   | "cli-missing"
+  | "permission-denied"
+  | "spawn"
   | "auth-expired"
   | "quota"
   | "network"

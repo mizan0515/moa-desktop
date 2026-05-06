@@ -17,6 +17,8 @@ use thiserror::Error;
 #[serde(rename_all = "kebab-case")]
 pub enum ProcessErrorKind {
     CliMissing,
+    PermissionDenied,
+    Spawn,
     AuthExpired,
     Quota,
     Network,
@@ -32,6 +34,8 @@ impl fmt::Display for ProcessErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::CliMissing => "cli-missing",
+            Self::PermissionDenied => "permission-denied",
+            Self::Spawn => "spawn",
             Self::AuthExpired => "auth-expired",
             Self::Quota => "quota",
             Self::Network => "network",
@@ -65,6 +69,24 @@ impl ProcessError {
         Self {
             kind: ProcessErrorKind::CliMissing,
             message: format!("failed to spawn {program:?}: {source}"),
+            exit_code: None,
+            stderr_tail: String::new(),
+        }
+    }
+
+    pub fn permission_denied(program: &str, source: std::io::Error) -> Self {
+        Self {
+            kind: ProcessErrorKind::PermissionDenied,
+            message: format!("permission denied spawning {program:?}: {source}"),
+            exit_code: None,
+            stderr_tail: String::new(),
+        }
+    }
+
+    pub fn spawn_failed(program: &str, source: std::io::Error) -> Self {
+        Self {
+            kind: ProcessErrorKind::Spawn,
+            message: format!("spawn {program:?} failed: {source}"),
             exit_code: None,
             stderr_tail: String::new(),
         }

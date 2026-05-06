@@ -79,6 +79,7 @@ impl ProcessRunner for MockRunner {
             pid: 0,
             aborted: AtomicBool::new(false),
             abort_tx,
+            timed_out_pending: Arc::new(AtomicBool::new(false)),
             stdin_tx: Mutex::new(None),
             exit_watch: exit_rx,
         });
