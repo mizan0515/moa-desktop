@@ -7,6 +7,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  EMPTY_SYNTHESIS,
+  type ClaimLedgerEntry,
+  type Confidence,
+  type EvidenceLevel,
+  type SynthesisData,
+} from "../synthesisTypes";
 
 export type Phase =
   | "preflight"
@@ -295,3 +302,85 @@ export const dryRunStore = {
 };
 
 export const PHASE_ORDER: Phase[] = PHASES;
+
+// T7-full → T6 component adapters.
+// dryRunStore accumulates raw event payloads; T6 components want typed shapes.
+
+function asConfidence(v: unknown): Confidence {
+  return v === "high" || v === "low" ? v : "med";
+}
+
+export function toSynthesisData(session: Session | null): SynthesisData {
+  if (!session) return EMPTY_SYNTHESIS;
+  const out: SynthesisData = {
+    verified: [],
+    codexOnly: [],
+    claudeOnly: [],
+    disagreement: [],
+    open: [],
+  };
+  for (const row of session.synthesisRows) {
+    const p = row.raw;
+    const sources = Array.isArray(p.sources) ? (p.sources as string[]) : [];
+    switch (row.column) {
+      case "verified":
+        out.verified.push({
+          kind: "verified",
+          claim: (p.claim as string) ?? "",
+          sources,
+          confidence: asConfidence(p.confidence),
+        });
+        break;
+      case "codex_only":
+        out.codexOnly.push({
+          kind: "codex_only",
+          claim: (p.claim as string) ?? "",
+          sources,
+          confidence: asConfidence(p.confidence),
+          note: p.note as string | undefined,
+        });
+        break;
+      case "claude_only":
+        out.claudeOnly.push({
+          kind: "claude_only",
+          claim: (p.claim as string) ?? "",
+          sources,
+          confidence: asConfidence(p.confidence),
+          note: p.note as string | undefined,
+        });
+        break;
+      case "disagreement":
+        out.disagreement.push({
+          kind: "disagreement",
+          topic: (p.topic as string) ?? "",
+          claudePosition: (p.claude_position as string) ?? "",
+          codexPosition: (p.codex_position as string) ?? "",
+          resolution: p.resolution as string | undefined,
+        });
+        break;
+      case "open":
+        out.open.push({
+          kind: "open",
+          question: (p.question as string) ?? "",
+          raisedBy: p.raised_by as string | undefined,
+        });
+        break;
+    }
+  }
+  return out;
+}
+
+export function toClaimLedger(session: Session | null): ClaimLedgerEntry[] {
+  if (!session) return [];
+  return session.claims.map((c) => {
+    const cite = c.citations?.[0];
+    const evidence = cite?.url ?? cite?.excerpt ?? "—";
+    const level: EvidenceLevel = "L3";
+    return {
+      claim: c.text,
+      evidence,
+      level,
+      confidence: asConfidence(c.confidence),
+    };
+  });
+}

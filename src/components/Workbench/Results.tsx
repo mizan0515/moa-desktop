@@ -1,19 +1,28 @@
+import { useSyncExternalStore } from "react";
 import SynthesisView from "../SynthesisView";
 import ClaimLedger from "../ClaimLedger";
 import CostMeter from "../CostMeter";
 import ErrorBanner from "../ErrorBanner";
 import VersionDriftWarning from "../VersionDriftWarning";
+import {
+  dryRunStore,
+  toClaimLedger,
+  toSynthesisData,
+} from "../../lib/orchestrator/dryRun";
 
 export default function Results() {
-  // T9: real telemetry / error / drift data is wired by T7 orchestrator.
-  // Until then, render with empty defaults so the layout settles.
+  useSyncExternalStore(dryRunStore.subscribe, dryRunStore.getSnapshot);
+  const session = dryRunStore.getActive();
+  const synthesis = toSynthesisData(session);
+  const claims = toClaimLedger(session);
+
   return (
     <div>
       <VersionDriftWarning items={[]} />
-      <ErrorBanner kind={null} />
+      <ErrorBanner kind={null} detail={session?.errorMessage} />
       <CostMeter />
-      <SynthesisView />
-      <ClaimLedger />
+      <SynthesisView data={synthesis} />
+      <ClaimLedger entries={claims} />
     </div>
   );
 }
