@@ -1,1 +1,1049 @@
-// owned by T7
+//! T7-full — orchestrator state machine + Tauri command surface.
+//!
+//! Sub-modules:
+//! - `state`     — Phase / Lane / Flow / WorkerMode / SessionState enums.
+//! - `flow`      — Flow A/B/C/D classifier (heuristic + override).
+//! - `supervisor`— Lane panic boundary (`tokio::spawn` + JoinHandle/AbortHandle wrap).
+//! - `adversarial` — adversarial-round prompt builder + verdict parser.
+//! - `verify`    — post-mutation verification command runner.
+//! - `dryrun`    — T7-thin walking skeleton (kept for legacy demo path).
+//!
+//! T7-thin's `dryrun://event` Tauri channel is left untouched. T7-full
+//! emits on a separate channel `orch://event` with the same envelope shape
+//! (session_id / phase / lane / kind / payload) — UI subscribes to either.
+
+pub mod adversarial;
+pub mod dryrun;
+pub mod flow;
+pub mod state;
+pub mod supervisor;
+pub mod verify;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::{mpsc, Mutex};
+
+use crate::adapters::{
+    claude::{ClaudeAdapter, ClaudeEvent, FirstPassRequest as ClaudeFirstPass},
+    codex::{CodexAdapter, CodexEvent, FirstPassRequest as CodexFirstPass},
+};
+use crate::lock::manager::{LockManager, LockSource};
+use crate::process::{ProcessControl, ProcessRunner};
+
+use self::flow::{classify, ClassifyInput};
+use self::state::{Flow, Lane, Phase, SessionState, MAX_ADVERSARIAL_ROUNDS};
+use self::supervisor::{LaneError, LaneSupervisor};
+
+pub const EVENT_NAME: &str = "orch://event";
+
+// ─── event envelope (UI-compatible with dryrun://event) ────────────────────
+
+#[derive(Clone, Serialize)]
+struct EventEnvelope<'a> {
+    session_id: &'a str,
+    phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lane: Option<&'static str>,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<Value>,
+}
+
+fn emit(
+    app: &AppHandle,
+    sid: &str,
+    phase: Phase,
+    lane: Option<Lane>,
+    kind: &'static str,
+    payload: Option<Value>,
+) {
+    let env = EventEnvelope {
+        session_id: sid,
+        phase: phase.as_str(),
+        lane: lane.map(|l| l.as_str()),
+        kind,
+        payload,
+    };
+    let _ = app.emit(EVENT_NAME, env);
+}
+
+// ─── public start / cancel / submit-synthesis / confirm-mutation API ───────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrchestrationStart {
+    pub task: String,
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub override_flow: Option<Flow>,
+    /// Use T8 mock runner (dry-run mode). Settings.mockMode passes this.
+    #[serde(default)]
+    pub mock_mode: bool,
+    /// cwd for adapter spawn.
+    pub cwd: PathBuf,
+    /// Project id (T4 lock key namespace).
+    pub project_id: String,
+    /// Verification command to run post-mutation. Empty = skip.
+    #[serde(default)]
+    pub verify_cmd: Option<String>,
+}
+
+// ─── coordinator state ────────────────────────────────────────────────────
+
+/// External commands the frontend posts back during a session — synthesis
+/// result (TS-side T3 merge), mutation confirm, abort.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum SessionCommand {
+    SubmitSynthesis { synthesis_json: String },
+    ConfirmMutation { proceed: bool },
+    Cancel,
+}
+
+struct SessionHandle {
+    cancelled: Arc<AtomicBool>,
+    /// Currently active worker process control (for cancel mid-stream).
+    active: Arc<Mutex<Option<ProcessControl>>>,
+    /// Channel to the driver task — frontend commands are routed here.
+    cmd_tx: mpsc::Sender<SessionCommand>,
+    /// Latest published state (best-effort snapshot for `get_state`).
+    state: Arc<Mutex<SessionState>>,
+}
+
+#[derive(Default)]
+pub struct OrchestrationCoordinator {
+    sessions: Mutex<HashMap<String, SessionHandle>>,
+}
+
+impl OrchestrationCoordinator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn new_session_id() -> String {
+        let ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        format!("orch-{ms}")
+    }
+
+    async fn register(&self, sid: &str, h: SessionHandle) {
+        self.sessions.lock().await.insert(sid.to_string(), h);
+    }
+
+    async fn unregister(&self, sid: &str) {
+        self.sessions.lock().await.remove(sid);
+    }
+
+    async fn post(&self, sid: &str, cmd: SessionCommand) -> bool {
+        let map = self.sessions.lock().await;
+        if let Some(h) = map.get(sid) {
+            // Mark cancel flag eagerly so any non-channel-aware loop sees it.
+            if matches!(cmd, SessionCommand::Cancel) {
+                h.cancelled.store(true, Ordering::SeqCst);
+                let active = h.active.lock().await;
+                if let Some(ctl) = active.as_ref() {
+                    let _ = ctl.abort().await;
+                }
+            }
+            h.cmd_tx.send(cmd).await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    async fn get_state(&self, sid: &str) -> Option<SessionState> {
+        let map = self.sessions.lock().await;
+        if let Some(h) = map.get(sid) {
+            Some(h.state.lock().await.clone())
+        } else {
+            None
+        }
+    }
+}
+
+// ─── runtime injection (adapters + runners) ────────────────────────────────
+//
+// At app startup `lib.rs` constructs `OrchestrationDeps` with real adapters
+// and registers it as Tauri state. Tests construct it with mock runners.
+
+pub struct OrchestrationDeps {
+    pub real_runner: Arc<dyn ProcessRunner>,
+    pub mock_runner: Arc<dyn ProcessRunner>,
+    pub lock_manager: LockManager,
+    pub claude_config: crate::adapters::claude::ClaudeConfig,
+    pub codex_config: crate::adapters::codex::CodexConfig,
+}
+
+impl OrchestrationDeps {
+    fn pick_runner(&self, mock: bool) -> Arc<dyn ProcessRunner> {
+        if mock {
+            self.mock_runner.clone()
+        } else {
+            self.real_runner.clone()
+        }
+    }
+
+    fn claude(&self, mock: bool) -> ClaudeAdapter {
+        ClaudeAdapter::new(self.pick_runner(mock), self.claude_config.clone())
+    }
+
+    fn codex(&self, mock: bool) -> CodexAdapter {
+        CodexAdapter::new(self.pick_runner(mock), self.codex_config.clone())
+    }
+}
+
+// ─── driver task ──────────────────────────────────────────────────────────
+
+struct DriverCtx {
+    app: AppHandle,
+    sid: String,
+    cancelled: Arc<AtomicBool>,
+    active: Arc<Mutex<Option<ProcessControl>>>,
+    state: Arc<Mutex<SessionState>>,
+}
+
+impl DriverCtx {
+    async fn set_state(&self, s: SessionState) {
+        let kind = s.kind();
+        *self.state.lock().await = s.clone();
+        emit(
+            &self.app,
+            &self.sid,
+            Phase::Preflight, // phase is overridden by per-step emits; this is a state-change ping
+            None,
+            "state",
+            Some(serde_json::json!({ "state": s, "kind": kind })),
+        );
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+async fn drive_session(
+    ctx: DriverCtx,
+    start: OrchestrationStart,
+    deps: Arc<OrchestrationDeps>,
+    mut cmd_rx: mpsc::Receiver<SessionCommand>,
+) {
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Preflight,
+        Some(Lane::System),
+        "session_start",
+        Some(serde_json::json!({
+            "task": start.task,
+            "mock_mode": start.mock_mode,
+            "project_id": start.project_id,
+        })),
+    );
+
+    // 1. Classify ──────────────────────────────────────────────────────────
+    ctx.set_state(SessionState::Classifying).await;
+    emit(&ctx.app, &ctx.sid, Phase::Classify, Some(Lane::System), "phase_start", None);
+    let flow = classify(&ClassifyInput {
+        task: start.task.clone(),
+        files: start.files.clone(),
+        user_override: start.override_flow,
+        research_only: false,
+    });
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Classify,
+        Some(Lane::System),
+        "phase_end",
+        Some(serde_json::json!({ "flow": flow.as_str() })),
+    );
+
+    if ctx.is_cancelled() {
+        return finalize_cancelled(&ctx).await;
+    }
+
+    // 2. First-pass × 2 (Flow C/D) — Flow A/B short-circuit to mutation. ───
+    let synth_input = if flow.needs_full_moa() {
+        match run_first_pass_pair(&ctx, &start, &deps, flow).await {
+            Ok(v) => Some(v),
+            Err(e) => return finalize_failed(&ctx, e).await,
+        }
+    } else {
+        None
+    };
+
+    if ctx.is_cancelled() {
+        return finalize_cancelled(&ctx).await;
+    }
+
+    // 3. Synthesis (TS callback) ───────────────────────────────────────────
+    let synthesis_json = if let Some(pair) = synth_input.as_ref() {
+        ctx.set_state(SessionState::AwaitingSynthesis { flow }).await;
+        emit(
+            &ctx.app,
+            &ctx.sid,
+            Phase::Synthesis,
+            Some(Lane::System),
+            "phase_start",
+            Some(serde_json::json!({
+                "claude_lines": pair.claude_lines,
+                "codex_lines": pair.codex_lines,
+            })),
+        );
+        match await_synthesis(&ctx, &mut cmd_rx).await {
+            Some(s) => {
+                emit(&ctx.app, &ctx.sid, Phase::Synthesis, Some(Lane::System), "phase_end", None);
+                s
+            }
+            None => return finalize_cancelled(&ctx).await,
+        }
+    } else {
+        String::new()
+    };
+
+    // 4. Adversarial round(s) ──────────────────────────────────────────────
+    if flow.needs_full_moa() {
+        match run_adversarial_loop(&ctx, &start, &deps, flow, &synthesis_json).await {
+            Ok(()) => {}
+            Err(e) => return finalize_failed(&ctx, e).await,
+        }
+    }
+
+    // 5. Mutation (Flow A/B/C only) — D is read-only. ─────────────────────
+    if flow.produces_mutation() {
+        match run_mutation_phase(&ctx, &start, &deps, flow, &mut cmd_rx).await {
+            Ok(MutationOutcome::Applied) => {
+                run_verify_phase(&ctx, &start).await;
+            }
+            Ok(MutationOutcome::Skipped) => {
+                emit(
+                    &ctx.app,
+                    &ctx.sid,
+                    Phase::Mutation,
+                    Some(Lane::System),
+                    "phase_end",
+                    Some(serde_json::json!({ "skipped": true })),
+                );
+            }
+            Err(e) => return finalize_failed(&ctx, e).await,
+        }
+    }
+
+    // 6. Final ────────────────────────────────────────────────────────────
+    ctx.set_state(SessionState::Final { flow, ok: true }).await;
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Final,
+        Some(Lane::System),
+        "session_done",
+        Some(serde_json::json!({ "flow": flow.as_str() })),
+    );
+}
+
+async fn finalize_cancelled(ctx: &DriverCtx) {
+    ctx.set_state(SessionState::Cancelled).await;
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Final,
+        Some(Lane::System),
+        "session_cancelled",
+        None,
+    );
+}
+
+async fn finalize_failed(ctx: &DriverCtx, msg: String) {
+    ctx.set_state(SessionState::Failed { message: msg.clone() })
+        .await;
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Final,
+        Some(Lane::System),
+        "session_error",
+        Some(serde_json::json!({ "message": msg })),
+    );
+}
+
+// ─── first-pass × 2 in parallel ───────────────────────────────────────────
+
+struct FirstPassPair {
+    claude_lines: usize,
+    codex_lines: usize,
+}
+
+async fn run_first_pass_pair(
+    ctx: &DriverCtx,
+    start: &OrchestrationStart,
+    deps: &Arc<OrchestrationDeps>,
+    flow: Flow,
+) -> Result<FirstPassPair, String> {
+    ctx.set_state(SessionState::FirstPassRunning {
+        flow,
+        claude_done: false,
+        codex_done: false,
+    })
+    .await;
+    emit(&ctx.app, &ctx.sid, Phase::FirstPass, Some(Lane::System), "phase_start", None);
+
+    let claude_adapter = deps.claude(start.mock_mode);
+    let codex_adapter = deps.codex(start.mock_mode);
+
+    let req_claude = ClaudeFirstPass {
+        task: start.task.clone(),
+        files: start.files.clone(),
+        cwd: start.cwd.clone(),
+    };
+    let req_codex = CodexFirstPass {
+        task: start.task.clone(),
+        files: start.files.clone(),
+        cwd: start.cwd.clone(),
+    };
+
+    let app_a = ctx.app.clone();
+    let sid_a = ctx.sid.clone();
+    let cancelled_a = ctx.cancelled.clone();
+    let active_a = ctx.active.clone();
+    let claude_sup: LaneSupervisor<Result<usize, String>> = LaneSupervisor::spawn(async move {
+        let stream = claude_adapter
+            .firstpass(req_claude)
+            .await
+            .map_err(|e| format!("claude firstpass spawn: {e}"))?;
+        store_active(&active_a, Some(stream.control.clone())).await;
+        let n = drain_claude_events(&app_a, &sid_a, Phase::FirstPass, Lane::Claude, stream.events, &cancelled_a)
+            .await;
+        store_active(&active_a, None).await;
+        Ok(n)
+    });
+
+    let app_b = ctx.app.clone();
+    let sid_b = ctx.sid.clone();
+    let cancelled_b = ctx.cancelled.clone();
+    let active_b = ctx.active.clone();
+    let codex_sup: LaneSupervisor<Result<usize, String>> = LaneSupervisor::spawn(async move {
+        let stream = codex_adapter
+            .firstpass(req_codex)
+            .await
+            .map_err(|e| format!("codex firstpass spawn: {e}"))?;
+        // Note: T2 ProcessControl is shared; we only track one in `active` for
+        // cancel — first-arrival wins, the other is aborted via supervisor abort.
+        store_active(&active_b, Some(stream.control.clone())).await;
+        let n = drain_codex_events(&app_b, &sid_b, Phase::FirstPass, Lane::Codex, stream.events, &cancelled_b)
+            .await;
+        store_active(&active_b, None).await;
+        Ok(n)
+    });
+
+    let (r_claude, r_codex) = tokio::join!(claude_sup.into_outcome(), codex_sup.into_outcome());
+
+    let claude_n = lane_result(r_claude, "claude")?;
+    let codex_n = lane_result(r_codex, "codex")?;
+
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::FirstPass,
+        Some(Lane::System),
+        "phase_end",
+        Some(serde_json::json!({
+            "claude_lines": claude_n,
+            "codex_lines": codex_n,
+        })),
+    );
+    Ok(FirstPassPair {
+        claude_lines: claude_n,
+        codex_lines: codex_n,
+    })
+}
+
+fn lane_result(r: Result<Result<usize, String>, LaneError>, lane: &str) -> Result<usize, String> {
+    match r {
+        Ok(Ok(n)) => Ok(n),
+        Ok(Err(e)) => Err(format!("{lane} lane error: {e}")),
+        Err(LaneError::Aborted) => Err(format!("{lane} lane aborted")),
+        Err(LaneError::Panic(m)) => Err(format!("{lane} lane panic: {m}")),
+        Err(e) => Err(format!("{lane} lane: {e}")),
+    }
+}
+
+async fn store_active(slot: &Mutex<Option<ProcessControl>>, val: Option<ProcessControl>) {
+    *slot.lock().await = val;
+}
+
+async fn drain_claude_events(
+    app: &AppHandle,
+    sid: &str,
+    phase: Phase,
+    lane: Lane,
+    mut rx: mpsc::Receiver<ClaudeEvent>,
+    cancelled: &AtomicBool,
+) -> usize {
+    let mut n = 0usize;
+    while let Some(ev) = rx.recv().await {
+        if cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        n += 1;
+        emit(
+            app,
+            sid,
+            phase,
+            Some(lane),
+            "line",
+            Some(serde_json::json!(ev)),
+        );
+        if matches!(ev, ClaudeEvent::Exit { .. }) {
+            break;
+        }
+    }
+    n
+}
+
+async fn drain_codex_events(
+    app: &AppHandle,
+    sid: &str,
+    phase: Phase,
+    lane: Lane,
+    mut rx: mpsc::Receiver<CodexEvent>,
+    cancelled: &AtomicBool,
+) -> usize {
+    let mut n = 0usize;
+    while let Some(ev) = rx.recv().await {
+        if cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        n += 1;
+        emit(
+            app,
+            sid,
+            phase,
+            Some(lane),
+            "line",
+            Some(serde_json::json!(ev)),
+        );
+        if matches!(ev, CodexEvent::Exit { .. }) {
+            break;
+        }
+    }
+    n
+}
+
+// ─── synthesis (frontend callback) ────────────────────────────────────────
+
+async fn await_synthesis(
+    ctx: &DriverCtx,
+    cmd_rx: &mut mpsc::Receiver<SessionCommand>,
+) -> Option<String> {
+    while let Some(cmd) = cmd_rx.recv().await {
+        match cmd {
+            SessionCommand::SubmitSynthesis { synthesis_json } => return Some(synthesis_json),
+            SessionCommand::Cancel => {
+                ctx.cancelled.store(true, Ordering::SeqCst);
+                return None;
+            }
+            SessionCommand::ConfirmMutation { .. } => {
+                // Out of order — ignore until we're at mutation step.
+                continue;
+            }
+        }
+    }
+    None
+}
+
+// ─── adversarial round(s) ─────────────────────────────────────────────────
+
+async fn run_adversarial_loop(
+    ctx: &DriverCtx,
+    start: &OrchestrationStart,
+    deps: &Arc<OrchestrationDeps>,
+    flow: Flow,
+    synthesis_json: &str,
+) -> Result<(), String> {
+    let mut round = 1u32;
+    loop {
+        if ctx.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        ctx.set_state(SessionState::AwaitingAdversarial { flow, round })
+            .await;
+        emit(
+            &ctx.app,
+            &ctx.sid,
+            Phase::Adversarial,
+            Some(Lane::System),
+            "phase_start",
+            Some(serde_json::json!({ "round": round })),
+        );
+
+        // Default reviewer: Codex (Claude is user-facing session holder).
+        let reviewer = adversarial::default_reviewer(Lane::Claude);
+        let prompt_body = adversarial::render_prompt(
+            &start.task,
+            synthesis_json,
+            round,
+            MAX_ADVERSARIAL_ROUNDS,
+        );
+
+        // Adversarial uses firstpass argv (read-only) but with the embedded
+        // synthesis prompt body — we feed the body as the "task" so the
+        // template substitutes it at the prompt position.
+        let verdict = match reviewer {
+            Lane::Codex => {
+                let codex = deps.codex(start.mock_mode);
+                let req = CodexFirstPass {
+                    task: prompt_body.clone(),
+                    files: start.files.clone(),
+                    cwd: start.cwd.clone(),
+                };
+                let stream = codex
+                    .firstpass(req)
+                    .await
+                    .map_err(|e| format!("codex adversarial spawn: {e}"))?;
+                store_active(&ctx.active, Some(stream.control.clone())).await;
+                let mut text = String::new();
+                let mut rx = stream.events;
+                while let Some(ev) = rx.recv().await {
+                    if ctx.is_cancelled() {
+                        break;
+                    }
+                    if let CodexEvent::Other { ref raw, .. } = ev {
+                        if let Some(s) = raw.get("text").and_then(|v| v.as_str()) {
+                            text.push_str(s);
+                            text.push('\n');
+                        }
+                    }
+                    emit(
+                        &ctx.app,
+                        &ctx.sid,
+                        Phase::Adversarial,
+                        Some(Lane::Codex),
+                        "line",
+                        Some(serde_json::json!(ev)),
+                    );
+                    if matches!(ev, CodexEvent::Exit { .. }) {
+                        break;
+                    }
+                }
+                store_active(&ctx.active, None).await;
+                adversarial::parse_verdict(&text)
+            }
+            _ => {
+                let claude = deps.claude(start.mock_mode);
+                let req = ClaudeFirstPass {
+                    task: prompt_body.clone(),
+                    files: start.files.clone(),
+                    cwd: start.cwd.clone(),
+                };
+                let stream = claude
+                    .firstpass(req)
+                    .await
+                    .map_err(|e| format!("claude adversarial spawn: {e}"))?;
+                store_active(&ctx.active, Some(stream.control.clone())).await;
+                let mut text = String::new();
+                let mut rx = stream.events;
+                while let Some(ev) = rx.recv().await {
+                    if ctx.is_cancelled() {
+                        break;
+                    }
+                    if let ClaudeEvent::Assistant { text: ref t, .. } = ev {
+                        text.push_str(t);
+                        text.push('\n');
+                    }
+                    emit(
+                        &ctx.app,
+                        &ctx.sid,
+                        Phase::Adversarial,
+                        Some(Lane::Claude),
+                        "line",
+                        Some(serde_json::json!(ev)),
+                    );
+                    if matches!(ev, ClaudeEvent::Exit { .. }) {
+                        break;
+                    }
+                }
+                store_active(&ctx.active, None).await;
+                adversarial::parse_verdict(&text)
+            }
+        };
+
+        emit(
+            &ctx.app,
+            &ctx.sid,
+            Phase::Adversarial,
+            Some(reviewer),
+            "phase_end",
+            Some(serde_json::json!({ "round": round, "verdict": format!("{verdict:?}") })),
+        );
+
+        match verdict {
+            adversarial::Verdict::Pass | adversarial::Verdict::Unknown => return Ok(()),
+            adversarial::Verdict::NeedClarification => {
+                // Treated as user-escalation — emit and stop the loop.
+                emit(
+                    &ctx.app,
+                    &ctx.sid,
+                    Phase::Adversarial,
+                    Some(Lane::System),
+                    "escalation",
+                    Some(serde_json::json!({ "reason": "need-clarification", "round": round })),
+                );
+                return Ok(());
+            }
+            adversarial::Verdict::Blocker => {
+                if round >= MAX_ADVERSARIAL_ROUNDS {
+                    emit(
+                        &ctx.app,
+                        &ctx.sid,
+                        Phase::Adversarial,
+                        Some(Lane::System),
+                        "escalation",
+                        Some(serde_json::json!({
+                            "reason": "max-rounds-exceeded",
+                            "round": round,
+                            "max": MAX_ADVERSARIAL_ROUNDS,
+                        })),
+                    );
+                    return Err(format!("adversarial blocker after {round} rounds"));
+                }
+                round += 1;
+            }
+        }
+    }
+}
+
+// ─── mutation phase ───────────────────────────────────────────────────────
+
+enum MutationOutcome {
+    Applied,
+    Skipped,
+}
+
+async fn run_mutation_phase(
+    ctx: &DriverCtx,
+    start: &OrchestrationStart,
+    deps: &Arc<OrchestrationDeps>,
+    flow: Flow,
+    cmd_rx: &mut mpsc::Receiver<SessionCommand>,
+) -> Result<MutationOutcome, String> {
+    // Mutation owner — Flow A: Claude, Flow B: Codex, Flow C: Claude default.
+    let owner = match flow {
+        Flow::B => Lane::Codex,
+        _ => Lane::Claude,
+    };
+    let owner_worker = owner.to_worker().ok_or_else(|| "system lane cannot mutate".to_string())?;
+
+    ctx.set_state(SessionState::AwaitingMutationConfirm {
+        flow,
+        round: 1,
+        mutation_owner: owner,
+    })
+    .await;
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Mutation,
+        Some(owner),
+        "awaiting_confirm",
+        Some(serde_json::json!({ "owner": owner.as_str() })),
+    );
+
+    // Wait for user confirm via cmd_rx.
+    let proceed = loop {
+        match cmd_rx.recv().await {
+            Some(SessionCommand::ConfirmMutation { proceed }) => break proceed,
+            Some(SessionCommand::Cancel) => {
+                ctx.cancelled.store(true, Ordering::SeqCst);
+                return Err("cancelled".into());
+            }
+            Some(_) => continue,
+            None => return Err("command channel closed".into()),
+        }
+    };
+    if !proceed {
+        return Ok(MutationOutcome::Skipped);
+    }
+
+    ctx.set_state(SessionState::Mutating { flow, owner }).await;
+    emit(&ctx.app, &ctx.sid, Phase::Mutation, Some(owner), "phase_start", None);
+
+    // T4 lock acquire — Repo → Project → Lane chain.
+    let repo_key = crate::git::canonical::RepoKey::from_path(&start.cwd);
+    let repo_guard = deps
+        .lock_manager
+        .acquire_repo(&repo_key)
+        .map_err(|e| format!("acquire repo lock: {e}"))?;
+    let project_guard = deps
+        .lock_manager
+        .acquire_project(&repo_guard, &start.project_id)
+        .map_err(|e| format!("acquire project lock: {e}"))?;
+    let lock_key = format!("session:{}", &ctx.sid);
+    let _lane_guard = deps
+        .lock_manager
+        .acquire_lane(&project_guard, &lock_key, owner_worker, LockSource::Scheduler)
+        .map_err(|e| format!("acquire lane lock: {e}"))?;
+
+    // Worktree creation: under <repo>/.moa-desktop/worktrees/<sid>
+    let wt_root = start.cwd.join(".moa-desktop").join("worktrees").join(&ctx.sid);
+    let branch = Some(format!("orch/{}", &ctx.sid));
+    let wt = crate::git::Worktree::add(&start.cwd, &wt_root, branch.as_deref())
+        .map_err(|e| format!("worktree add: {e}"))?;
+
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Mutation,
+        Some(owner),
+        "worktree_created",
+        Some(serde_json::json!({ "path": wt.path.display().to_string() })),
+    );
+
+    // Spawn mutation worker.
+    let worker_result = match owner {
+        Lane::Claude => {
+            let adapter = deps.claude(start.mock_mode);
+            let req = crate::adapters::claude::MutationRequest {
+                task: start.task.clone(),
+                worktree_path: wt.path.clone(),
+            };
+            let stream = adapter
+                .mutation(req)
+                .await
+                .map_err(|e| format!("claude mutation spawn: {e}"))?;
+            store_active(&ctx.active, Some(stream.control.clone())).await;
+            let n = drain_claude_events(
+                &ctx.app,
+                &ctx.sid,
+                Phase::Mutation,
+                Lane::Claude,
+                stream.events,
+                &ctx.cancelled,
+            )
+            .await;
+            store_active(&ctx.active, None).await;
+            n
+        }
+        Lane::Codex => {
+            let adapter = deps.codex(start.mock_mode);
+            let req = crate::adapters::codex::MutationRequest {
+                task: start.task.clone(),
+                worktree_path: wt.path.clone(),
+            };
+            let stream = adapter
+                .mutation(req)
+                .await
+                .map_err(|e| format!("codex mutation spawn: {e}"))?;
+            store_active(&ctx.active, Some(stream.control.clone())).await;
+            let n = drain_codex_events(
+                &ctx.app,
+                &ctx.sid,
+                Phase::Mutation,
+                Lane::Codex,
+                stream.events,
+                &ctx.cancelled,
+            )
+            .await;
+            store_active(&ctx.active, None).await;
+            n
+        }
+        Lane::System => return Err("system lane cannot mutate".into()),
+    };
+
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Mutation,
+        Some(owner),
+        "worker_finished",
+        Some(serde_json::json!({ "events": worker_result })),
+    );
+
+    if ctx.is_cancelled() {
+        let _ = wt.remove();
+        return Err("cancelled".into());
+    }
+
+    // Extract patch + check + apply.
+    let patch_dir = start.cwd.join(".moa-desktop").join("patches").join(&ctx.sid);
+    let patch = crate::git::patch::extract(&wt, &patch_dir, "mutation")
+        .map_err(|e| format!("patch extract: {e}"))?;
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Mutation,
+        Some(Lane::System),
+        "patch_extracted",
+        Some(serde_json::json!({
+            "path": patch.path.display().to_string(),
+            "empty": patch.is_empty(),
+            "size": patch.text.len(),
+        })),
+    );
+
+    if patch.is_empty() {
+        let _ = wt.remove();
+        emit(
+            &ctx.app,
+            &ctx.sid,
+            Phase::Mutation,
+            Some(Lane::System),
+            "phase_end",
+            Some(serde_json::json!({ "applied": false, "reason": "empty-patch" })),
+        );
+        return Ok(MutationOutcome::Skipped);
+    }
+
+    crate::git::patch::check(&start.cwd, &patch).map_err(|e| format!("patch check: {e}"))?;
+    crate::git::patch::apply(&start.cwd, &patch).map_err(|e| format!("patch apply: {e}"))?;
+    let _ = wt.remove();
+
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Mutation,
+        Some(Lane::System),
+        "phase_end",
+        Some(serde_json::json!({ "applied": true })),
+    );
+    Ok(MutationOutcome::Applied)
+}
+
+// ─── verify phase ─────────────────────────────────────────────────────────
+
+async fn run_verify_phase(ctx: &DriverCtx, start: &OrchestrationStart) {
+    ctx.set_state(SessionState::Verifying {
+        flow: Flow::C, // best-effort label; the actual flow is in last state but unused downstream
+    })
+    .await;
+    emit(&ctx.app, &ctx.sid, Phase::Verify, Some(Lane::System), "phase_start", None);
+
+    let mut spec = verify::VerifySpec::new(&start.cwd);
+    if let Some(c) = start.verify_cmd.as_ref() {
+        spec = spec.with_command(c.clone());
+    }
+    let outcome = verify::run(spec).await;
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Verify,
+        Some(Lane::System),
+        "phase_end",
+        Some(serde_json::json!({ "outcome": outcome })),
+    );
+}
+
+// ─── Tauri commands ───────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn orch_start(
+    app: AppHandle,
+    coord: State<'_, OrchestrationCoordinator>,
+    deps: State<'_, Arc<OrchestrationDeps>>,
+    start: OrchestrationStart,
+) -> Result<String, String> {
+    let sid = OrchestrationCoordinator::new_session_id();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let active = Arc::new(Mutex::new(None));
+    let state = Arc::new(Mutex::new(SessionState::Idle));
+    let (tx, rx) = mpsc::channel::<SessionCommand>(32);
+
+    coord
+        .register(
+            &sid,
+            SessionHandle {
+                cancelled: cancelled.clone(),
+                active: active.clone(),
+                cmd_tx: tx,
+                state: state.clone(),
+            },
+        )
+        .await;
+
+    let ctx = DriverCtx {
+        app: app.clone(),
+        sid: sid.clone(),
+        cancelled,
+        active,
+        state,
+    };
+    let deps = deps.inner().clone();
+    let sid_for_cleanup = sid.clone();
+    let app_for_cleanup = app.clone();
+
+    // Wrap the driver in a LaneSupervisor so a panic in the driver does not
+    // tear down the runtime — failures bubble up as a lane error and we emit
+    // an `orch://event session_error` instead.
+    let driver_sup: LaneSupervisor<()> = LaneSupervisor::spawn(async move {
+        drive_session(ctx, start, deps, rx).await;
+    });
+
+    tokio::spawn(async move {
+        let outcome = driver_sup.into_outcome().await;
+        if let Err(e) = outcome {
+            // Driver panicked — emit a structured error so UI can surface it.
+            let env = EventEnvelope {
+                session_id: &sid_for_cleanup,
+                phase: Phase::Final.as_str(),
+                lane: Some(Lane::System.as_str()),
+                kind: "session_error",
+                payload: Some(serde_json::json!({ "message": format!("driver panic: {e}") })),
+            };
+            let _ = app_for_cleanup.emit(EVENT_NAME, env);
+        }
+        if let Some(coord) = app_for_cleanup.try_state::<OrchestrationCoordinator>() {
+            coord.unregister(&sid_for_cleanup).await;
+        }
+    });
+
+    Ok(sid)
+}
+
+#[tauri::command]
+pub async fn orch_cancel(
+    coord: State<'_, OrchestrationCoordinator>,
+    session_id: String,
+) -> Result<bool, String> {
+    Ok(coord.post(&session_id, SessionCommand::Cancel).await)
+}
+
+#[tauri::command]
+pub async fn orch_submit_synthesis(
+    coord: State<'_, OrchestrationCoordinator>,
+    session_id: String,
+    synthesis_json: String,
+) -> Result<bool, String> {
+    Ok(coord
+        .post(&session_id, SessionCommand::SubmitSynthesis { synthesis_json })
+        .await)
+}
+
+#[tauri::command]
+pub async fn orch_confirm_mutation(
+    coord: State<'_, OrchestrationCoordinator>,
+    session_id: String,
+    proceed: bool,
+) -> Result<bool, String> {
+    Ok(coord
+        .post(&session_id, SessionCommand::ConfirmMutation { proceed })
+        .await)
+}
+
+#[tauri::command]
+pub async fn orch_get_state(
+    coord: State<'_, OrchestrationCoordinator>,
+    session_id: String,
+) -> Result<Option<SessionState>, String> {
+    Ok(coord.get_state(&session_id).await)
+}
+
+// `tauri::AppHandle::try_state` requires this trait import in scope.
+use tauri::Manager;

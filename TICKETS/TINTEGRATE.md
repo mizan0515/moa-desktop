@@ -13,6 +13,14 @@
 - 권위: PLAN.md verification checklist + adversarial review 의 § F6 추가 항목, DESIGN.md verification, ~/.claude/CODEX-MCP.md
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 모든 선행 티켓 commit 이 있는지 확인 (T2~T12 + TINTEGRATE 제외):
+```
+cd D:\moa-desktop && git log master --oneline -200 | rg -i "feat\(T2\)|feat\(T3\)|feat\(T4\)|feat\(T5a\)|feat\(T5b\)|feat\(T6\)|feat\(T7-thin\)|feat\(T7-full\)|feat\(T8\)|feat\(T9\)|feat\(T10\)|feat\(T11\)|feat\(T12\)" | wc -l
+```
+- 결과 `13` 이면 OK — 작업 진행
+- 13 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고** + 누락 commit 목록 작성.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal
@@ -61,7 +69,13 @@
 - e2e 비용 < $5 — real mode 작은 task만
 - 비밀 commit 절대 X
 
-[작업 완료 시]
-- commit: `feat(TINTEGRATE): final integration + verification + README + demo`
-- 보고: verification 통과 매트릭스, follow-up 안건 (있다면), v0.1.0 release 준비 상태
+[작업 완료 시 — 무조건 이 순서로]
+1. commit: `feat(TINTEGRATE): final integration + verification + README + demo` (본문에 `Closes #13` 포함, push 금지)
+2. **GitHub 카드 완료 처리 — 잊지 말고 무조건 실행** (안 하면 칠판 https://github.com/users/mizan0515/projects 에 status:doing 으로 남아 다른 세션이 또 잡을 수 있음):
+   ```
+   node ~/.claude/scripts/gh-tickets.mjs complete D:\moa-desktop 13
+   ```
+   - 출력에 `COMPLETED=13` 또는 `ALREADY_CLOSED=13` 가 보여야 OK.
+   - 실패 시 사용자 보고 + STOP. gh 인증 오류면 `gh auth refresh -s project,read:project` 안내.
+3. 보고: verification 통과 매트릭스, follow-up 안건 (있다면), v0.1.0 release 준비 상태, **GitHub 카드 close 결과 1줄**.
 ```

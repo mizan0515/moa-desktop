@@ -14,6 +14,14 @@ T11 통과 후 (Phase 6 마무리). worktree: T12-integrator.
 - 글로벌 reference: ~/.claude/plugins/...skills/병행통합 (해당 skill 의 머지 순서 + 충돌 stop 패턴)
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 선행 commit 1개 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T11\)" | wc -l
+```
+- 결과 `1` 이상이면 OK — 작업 진행
+- 0 이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal
@@ -79,8 +87,13 @@ T11 의 N lane 이 모두 완료된 후:
 - rollback 은 명시적 사용자 결정 후만
 - 비밀 파일 access X
 
-[작업 완료 시]
-- commit: `feat(T12): merge integrator (병행통합 등가) + IntegratePanel + 충돌 한국어 보고`
-- push 금지
-- 보고: 머지 lifecycle 다이어그램, 충돌 보고 sample (한국어), Phase 6 (v1.5) 완료 — 다음 Phase 5 polish 진입 가능
+[작업 완료 시 — 무조건 이 순서로]
+1. commit: `feat(T12): merge integrator (병행통합 등가) + IntegratePanel + 충돌 한국어 보고` (본문에 `Closes #17` 포함, push 금지)
+2. **GitHub 카드 완료 처리 — 잊지 말고 무조건 실행** (안 하면 칠판 https://github.com/users/mizan0515/projects 에 status:doing 으로 남아 다른 세션이 또 잡을 수 있음):
+   ```
+   node ~/.claude/scripts/gh-tickets.mjs complete D:\moa-desktop 17
+   ```
+   - 출력에 `COMPLETED=17` 또는 `ALREADY_CLOSED=17` 가 보여야 OK.
+   - 실패 시 사용자 보고 + STOP. gh 인증 오류면 `gh auth refresh -s project,read:project` 안내.
+3. 보고: 머지 lifecycle 다이어그램, 충돌 보고 sample (한국어), Phase 6 (v1.5) 완료 — 다음 Phase 5 polish 진입 가능, **GitHub 카드 close 결과 1줄**.
 ```

@@ -1,5 +1,7 @@
 # T8 — Mock mode + canned worker responses
 
+> ✅ **DONE** — 2026-05-06, commit `44dae08`. 6 canned JSONL fixtures + `MockRunner` (`ProcessRunner` impl) + 5 tests passing. Codex adversarial review applied (abort→Killed kind parity, empty-argv parity, synthesis open-row count invariant locked by test).
+
 ## 새 Claude 창 만들기 가이드
 1. T1 통과 후 새 창 (worktree 권장: T8-mock)
 2. 아래 프롬프트 붙여넣기

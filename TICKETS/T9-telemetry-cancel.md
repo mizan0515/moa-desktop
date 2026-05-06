@@ -66,7 +66,13 @@ T2 통과 후 (Phase 4). worktree: T9-telemetry.
 - 비밀 (token, key) UI 표시 X
 - 비용은 추정치 명시 (정확치 X — Anthropic billing 과 다를 수 있음)
 
-[작업 완료 시]
-- commit: `feat(T9): telemetry + cancellation + error UX + version drift`
-- 보고: cost cap 기본값, error message 카탈로그, Phase 4 hardening 완료
+[작업 완료 시 — 무조건 이 순서로]
+1. commit: `feat(T9): telemetry + cancellation + error UX + version drift` (본문에 `Closes #12` 포함, push 금지)
+2. **GitHub 카드 완료 처리 — 잊지 말고 무조건 실행** (안 하면 칠판 https://github.com/users/mizan0515/projects 에 status:doing 으로 남아 다른 세션이 또 잡을 수 있음):
+   ```
+   node ~/.claude/scripts/gh-tickets.mjs complete D:\moa-desktop 12
+   ```
+   - 출력에 `COMPLETED=12` 또는 `ALREADY_CLOSED=12` 가 보여야 OK.
+   - 실패 시 사용자 보고 + STOP. gh 인증 오류면 `gh auth refresh -s project,read:project` 안내.
+3. 보고: cost cap 기본값, error message 카탈로그, Phase 4 hardening 완료, **GitHub 카드 close 결과 1줄**.
 ```

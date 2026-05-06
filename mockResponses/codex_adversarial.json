@@ -1,0 +1,5 @@
+{"event":"start","worker":"codex","phase":"adversarial","ts":"2026-05-06T10:02:00Z"}
+{"event":"critique","target":"claude:c3","kind":"overgeneralized","text":"Cursor advantage assumes monotonic sort key; tables sorted by mutable fields (e.g. updated_at) need stable secondary key — claim should narrow."}
+{"event":"critique","target":"synthesis:verified:plural-nouns","kind":"weak_normativity","text":"'SHOULD' is conventional, not mandated by any RFC — synthesis row's 'high' confidence overstates the normative force."}
+{"event":"missing_angle","topic":"observability","text":"Trace propagation (W3C traceparent) and structured logging schema not covered by either pass."}
+{"event":"end","status":"ok"}

@@ -14,6 +14,14 @@ T7-full + T5a + T5b 통과 후 (Phase 6 v1.5 진입). worktree: T10-decomposer.
 - 글로벌 reference: ~/.claude/plugins/...skills/병행티켓 (해당 skill 의 prompt 패턴 본받기)
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 선행 commit 3개 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat\(T5a\)|feat\(T5b\)" | wc -l
+```
+- 결과 `3` 면 OK — 작업 진행
+- 3 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal
@@ -76,8 +84,13 @@ T7-full + T5a + T5b 통과 후 (Phase 6 v1.5 진입). worktree: T10-decomposer.
 - read-only first-pass + mutation owner 분리 (decomposer 자체는 mutation 만드는 게 아니라 ticket 정의만)
 - 비밀 파일 access X
 
-[작업 완료 시]
-- commit: `feat(T10): ticket decomposer (병행티켓 등가) + TicketBoard UI`
-- push 금지
-- 보고: 분해 결과 schema, graph cycle 검증 알고리즘, T11 parallel runner 가 본 결과를 어떻게 소비하는지
+[작업 완료 시 — 무조건 이 순서로]
+1. commit: `feat(T10): ticket decomposer (병행티켓 등가) + TicketBoard UI` (본문에 `Closes #15` 포함, push 금지)
+2. **GitHub 카드 완료 처리 — 잊지 말고 무조건 실행** (안 하면 칠판 https://github.com/users/mizan0515/projects 에 status:doing 으로 남아 다른 세션이 또 잡을 수 있음):
+   ```
+   node ~/.claude/scripts/gh-tickets.mjs complete D:\moa-desktop 15
+   ```
+   - 출력에 `COMPLETED=15` 또는 `ALREADY_CLOSED=15` 가 보여야 OK.
+   - 실패 시 사용자 보고 + STOP. gh 인증 오류면 `gh auth refresh -s project,read:project` 안내.
+3. 보고: 분해 결과 schema, graph cycle 검증 알고리즘, T11 parallel runner 가 본 결과를 어떻게 소비하는지, **GitHub 카드 close 결과 1줄**.
 ```
