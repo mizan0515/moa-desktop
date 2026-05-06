@@ -498,3 +498,112 @@
     max-height: 200px;
   }
 }
+
+/* T9 — cost meter, error banner, version drift */
+.cost-meter-est {
+  font-size: 0.75rem;
+  color: var(--fg-2);
+  font-weight: 400;
+}
+.cost-meter-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+.cost-meter-scope {
+  color: var(--fg-2);
+}
+.cost-meter-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.cost-meter-table th,
+.cost-meter-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+}
+.cost-meter-table th:first-child,
+.cost-meter-table td:first-child {
+  text-align: left;
+}
+.cost-meter-sub {
+  color: var(--fg-2);
+  font-size: 0.75rem;
+}
+.cost-meter-note {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: var(--fg-2);
+}
+.cap-banner {
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 6px 0;
+  font-size: 0.85rem;
+}
+.cap-warn {
+  background: #4d3a00;
+  color: #ffd86b;
+}
+.cap-exceeded {
+  background: #5a1a1a;
+  color: #ff9b9b;
+}
+.error-banner {
+  padding: 8px 12px;
+  margin: 6px 0;
+  border-left: 3px solid #ff6b6b;
+  background: #2a1414;
+  color: #ffdada;
+  border-radius: 3px;
+}
+.error-banner-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.error-banner-kind {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: var(--fg-2);
+}
+.error-banner-dismiss,
+.version-drift-dismiss {
+  margin-left: auto;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.error-banner-detail,
+.error-banner-remedy {
+  margin: 4px 0;
+  font-size: 0.85rem;
+}
+.error-banner-raw pre {
+  max-height: 200px;
+  overflow: auto;
+  font-size: 0.75rem;
+}
+.version-drift {
+  padding: 8px 12px;
+  margin: 6px 0;
+  border-left: 3px solid #6b9bff;
+  background: #14202a;
+  color: #cfe0ff;
+  border-radius: 3px;
+  font-size: 0.85rem;
+}
+.version-drift-head {
+  display: flex;
+  align-items: center;
+}
+.version-drift ul {
+  margin: 4px 0 0 0;
+  padding-left: 18px;
+}
