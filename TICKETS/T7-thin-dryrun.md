@@ -13,6 +13,14 @@ T8, T6 통과 후 새 창. worktree: T7thin-dryrun.
 - 권위: DESIGN.md, PLAN.md (Phase 1 demo milestone), synthesis.md, ~/.claude/CODEX-MCP.md
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 선행 commit 2개 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -50 | rg -i "feat\(T6\)|feat\(T8\)" | wc -l
+```
+- 결과 `2` 면 OK — 작업 진행
+- 2 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal

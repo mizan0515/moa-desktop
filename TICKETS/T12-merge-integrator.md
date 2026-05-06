@@ -14,6 +14,14 @@ T11 통과 후 (Phase 6 마무리). worktree: T12-integrator.
 - 글로벌 reference: ~/.claude/plugins/...skills/병행통합 (해당 skill 의 머지 순서 + 충돌 stop 패턴)
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 선행 commit 1개 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T11\)" | wc -l
+```
+- 결과 `1` 이상이면 OK — 작업 진행
+- 0 이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal

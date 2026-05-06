@@ -14,6 +14,14 @@ T7-full + T5a + T5b 통과 후 (Phase 6 v1.5 진입). worktree: T10-decomposer.
 - 글로벌 reference: ~/.claude/plugins/...skills/병행티켓 (해당 skill 의 prompt 패턴 본받기)
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 선행 commit 3개 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat\(T5a\)|feat\(T5b\)" | wc -l
+```
+- 결과 `3` 면 OK — 작업 진행
+- 3 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal

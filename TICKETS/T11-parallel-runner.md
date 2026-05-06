@@ -13,6 +13,14 @@ T4 + T7-full + T9 + T10 통과 후 (Phase 6). worktree: T11-parallel.
 - 권위: PROJECT-RULES.md, AGENTS.md, DESIGN.md (## v1.5 scope, ## UI), PLAN.md (§ F6 lock ordering, § Phase 6 resource budget), TICKETS/T4 (lock manager + worktree pool API), TICKETS/T7-full (lane supervisor + panic boundary)
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 선행 commit 4개 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T4\)|feat\(T7-full\)|feat\(T9\)|feat\(T10\)" | wc -l
+```
+- 결과 `4` 면 OK — 작업 진행
+- 4 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal

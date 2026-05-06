@@ -13,6 +13,14 @@ T3, T4, T5a, T5b 통과 후. worktree: T7full-orch.
 - 권위: ~/.claude/CODEX-MCP.md (§ 2.5 Flow 결정 트리 + § 2.6 템플릿), PLAN.md (§ 0 conflict protocol), DESIGN.md
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 선행 commit 4개 있는지 확인:
+```
+cd D:\moa-desktop && git fetch origin master 2>/dev/null; git log master --oneline -50 | rg -i "feat\(T3\)|feat\(T4\)|feat\(T5a\)|feat\(T5b\)" | wc -l
+```
+- 결과 `4` 면 OK — 작업 진행
+- 4 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**. 자기가 worktree 만들어 작업하지 X (다른 워커와 stack 충돌 위험). lead 세션이 머지 끝낼 때까지 대기.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal

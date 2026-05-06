@@ -13,6 +13,14 @@
 - 권위: PLAN.md verification checklist + adversarial review 의 § F6 추가 항목, DESIGN.md verification, ~/.claude/CODEX-MCP.md
 - 운영: MoA Flow C — § 2.6 템플릿 A
 
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 모든 선행 티켓 commit 이 있는지 확인 (T2~T12 + TINTEGRATE 제외):
+```
+cd D:\moa-desktop && git log master --oneline -200 | rg -i "feat\(T2\)|feat\(T3\)|feat\(T4\)|feat\(T5a\)|feat\(T5b\)|feat\(T6\)|feat\(T7-thin\)|feat\(T7-full\)|feat\(T8\)|feat\(T9\)|feat\(T10\)|feat\(T11\)|feat\(T12\)" | wc -l
+```
+- 결과 `13` 이면 OK — 작업 진행
+- 13 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고** + 누락 commit 목록 작성.
+
 [INDEPENDENT FIRST-PASS — read-only]
 
 ## Goal
