@@ -1,0 +1,20 @@
+[MUTATION OWNER — isolated worktree]
+
+## Task
+{{task}}
+
+## Worktree (your cwd)
+{{worktree}}
+
+## Deliverable
+1. Approach (chosen + 1-line why) + 1 rejected alternative
+2. Files touched
+3. Verification steps (failing test first if behavior change)
+4. Sources (if web-searched)
+5. Open questions
+
+## Constraints
+- you are inside an isolated worktree — main repo is untouched
+- write a failing test FIRST when adding/fixing behavior, then make it pass
+- do not push, do not run git operations beyond `git status`/`git diff`
+- if peer review needed, write `NEED_PEER_REVIEW` and stop

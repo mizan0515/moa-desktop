@@ -121,8 +121,12 @@ impl ProcessExit {
 }
 
 /// Stdin command channel payload.
+///
+/// Public so out-of-crate fake runners (integration tests, future
+/// benchmark harnesses) can construct a `ProcessControlInner` directly
+/// without re-implementing the full supervisor.
 #[derive(Debug)]
-pub(crate) enum StdinCommand {
+pub enum StdinCommand {
     Write(Vec<u8>),
     Close,
 }
@@ -133,15 +137,15 @@ pub(crate) enum StdinCommand {
 /// (idempotent via `AtomicBool`).
 #[derive(Clone)]
 pub struct ProcessControl {
-    pub(crate) inner: Arc<ProcessControlInner>,
+    pub inner: Arc<ProcessControlInner>,
 }
 
-pub(crate) struct ProcessControlInner {
-    pub(crate) pid: u32,
-    pub(crate) aborted: AtomicBool,
-    pub(crate) abort_tx: mpsc::Sender<()>,
-    pub(crate) stdin_tx: Mutex<Option<mpsc::Sender<StdinCommand>>>,
-    pub(crate) exit_watch: watch::Receiver<Option<ProcessExit>>,
+pub struct ProcessControlInner {
+    pub pid: u32,
+    pub aborted: AtomicBool,
+    pub abort_tx: mpsc::Sender<()>,
+    pub stdin_tx: Mutex<Option<mpsc::Sender<StdinCommand>>>,
+    pub exit_watch: watch::Receiver<Option<ProcessExit>>,
 }
 
 impl ProcessControl {
