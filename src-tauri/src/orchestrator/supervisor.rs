@@ -40,6 +40,9 @@ impl std::error::Error for LaneError {}
 /// Owns a `JoinHandle` plus the abort handle so dropping the supervisor
 /// fires `.abort()`. Callers are expected to `await` `into_outcome()` for
 /// the structured result.
+///
+/// **Backlog #20 (pending)** — AppHandle mock 기반 end-to-end 통합 테스트 부재.
+/// 본 구조체 또는 AppHandle 의존부 변경 전에 #20 결정 트리 확인.
 pub struct LaneSupervisor<T> {
     join: Option<JoinHandle<T>>,
     abort: AbortHandle,

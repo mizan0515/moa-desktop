@@ -217,6 +217,9 @@ impl CodexAdapter {
     /// Uses `--dangerously-bypass-approvals-and-sandbox` (Windows-required;
     /// `workspace-write` is broken — S2 finding #5). Caller MUST ensure
     /// `worktree` is an isolated path under `~/.moa-desktop/worktrees/`.
+    ///
+    /// **Backlog #19 (pending)** — sandbox 모드 표기가 PLAN.md/DESIGN.md 와 drift.
+    /// 본 함수 / sandbox flag 변경 전에 #19 결정 트리 확인.
     pub fn mutation_argv(&self, worktree: &Path, prompt: &str) -> Vec<String> {
         vec![
             self.config.program.to_string_lossy().into_owned(),

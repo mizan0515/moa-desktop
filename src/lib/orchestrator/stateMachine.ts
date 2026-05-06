@@ -198,7 +198,7 @@ async function runSynthesisAndSubmit(s: OrchSession): Promise<void> {
   // Parse accumulated NDJSON-ish lines per lane into WorkerOutput.
   const claude = parseWorkerLanes(s.lanes.claude, "claude");
   const codex = parseWorkerLanes(s.lanes.codex, "codex");
-  const data = synthesize([claude, codex]);
+  const data = synthesize(claude, codex);
   const json = JSON.stringify(data);
   try {
     await invoke("orch_submit_synthesis", {
