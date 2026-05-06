@@ -61,7 +61,13 @@
 - e2e 비용 < $5 — real mode 작은 task만
 - 비밀 commit 절대 X
 
-[작업 완료 시]
-- commit: `feat(TINTEGRATE): final integration + verification + README + demo`
-- 보고: verification 통과 매트릭스, follow-up 안건 (있다면), v0.1.0 release 준비 상태
+[작업 완료 시 — 무조건 이 순서로]
+1. commit: `feat(TINTEGRATE): final integration + verification + README + demo` (본문에 `Closes #13` 포함, push 금지)
+2. **GitHub 카드 완료 처리 — 잊지 말고 무조건 실행** (안 하면 칠판 https://github.com/users/mizan0515/projects 에 status:doing 으로 남아 다른 세션이 또 잡을 수 있음):
+   ```
+   node ~/.claude/scripts/gh-tickets.mjs complete D:\moa-desktop 13
+   ```
+   - 출력에 `COMPLETED=13` 또는 `ALREADY_CLOSED=13` 가 보여야 OK.
+   - 실패 시 사용자 보고 + STOP. gh 인증 오류면 `gh auth refresh -s project,read:project` 안내.
+3. 보고: verification 통과 매트릭스, follow-up 안건 (있다면), v0.1.0 release 준비 상태, **GitHub 카드 close 결과 1줄**.
 ```

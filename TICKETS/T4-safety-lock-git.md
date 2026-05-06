@@ -71,7 +71,13 @@ Mutation 안전 인프라:
 - mutation 권한 부여는 명시적 lock acquire 후만
 - 사용자 main repo 손상 0 (worktree 안에서만)
 
-[작업 완료 시]
-- commit: `feat(T4): worktree mutation + lock + journal + multi-instance`
-- 보고: 4개 subsystem API, T7 가 호출할 시퀀스 (acquire → mutate → patch verify → apply 또는 reject → release), edge case 테스트 결과
+[작업 완료 시 — 무조건 이 순서로]
+1. commit: `feat(T4): worktree mutation + lock + journal + multi-instance` (본문에 `Closes #10` 포함, push 금지)
+2. **GitHub 카드 완료 처리 — 잊지 말고 무조건 실행** (안 하면 칠판 https://github.com/users/mizan0515/projects 에 status:doing 으로 남아 다른 세션이 또 잡을 수 있음):
+   ```
+   node ~/.claude/scripts/gh-tickets.mjs complete D:\moa-desktop 10
+   ```
+   - 출력에 `COMPLETED=10` 또는 `ALREADY_CLOSED=10` 가 보여야 OK.
+   - 실패 시 사용자 보고 + STOP. gh 인증 오류면 `gh auth refresh -s project,read:project` 안내.
+3. 보고: 4개 subsystem API, T7 가 호출할 시퀀스 (acquire → mutate → patch verify → apply 또는 reject → release), edge case 테스트 결과, **GitHub 카드 close 결과 1줄**.
 ```
