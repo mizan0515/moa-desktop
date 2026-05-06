@@ -243,6 +243,244 @@
   font-style: italic;
 }
 
+.synthesis-view {
+  container-type: inline-size;
+}
+
+.synthesis-empty,
+.synthesis-col-empty {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.synthesis-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-0);
+}
+
+.synthesis-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.synthesis-row.synthesis-head {
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.synthesis-col-header {
+  padding: 6px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.synthesis-col-header:last-child {
+  border-right: none;
+}
+
+.synthesis-col {
+  padding: 6px 8px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+.synthesis-col:last-child {
+  border-right: none;
+}
+
+.synthesis-count {
+  font-size: 10px;
+  color: var(--fg-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.synthesis-col-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.synthesis-item {
+  font-size: 12px;
+  color: var(--fg-1);
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.synthesis-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.synthesis-claim {
+  color: var(--fg-0);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.synthesis-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--fg-2);
+  margin-top: 3px;
+}
+
+.synthesis-pos {
+  color: var(--fg-1);
+  word-break: break-word;
+}
+
+.synthesis-sources {
+  font-family: var(--mono);
+}
+
+.synthesis-note {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--fg-2);
+  font-style: italic;
+  word-break: break-word;
+}
+
+.synthesis-conf,
+.claim-conf,
+.claim-level {
+  font-size: 10px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  letter-spacing: 0.04em;
+}
+
+.conf-high { color: #7fdca7; border-color: #7fdca7; }
+.conf-med  { color: #e8c46b; border-color: #e8c46b; }
+.conf-low  { color: #e08a8a; border-color: #e08a8a; }
+
+.lvl-L1, .lvl-L2 { color: #7fdca7; border-color: #7fdca7; }
+.lvl-L3 { color: #5eb3ff; border-color: #5eb3ff; }
+.lvl-L4 { color: #b8a4ff; border-color: #b8a4ff; }
+.lvl-none { color: var(--fg-2); }
+
+.synthesis-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.synthesis-acc {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+}
+
+.synthesis-acc > summary {
+  cursor: pointer;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--fg-1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.synthesis-acc[open] > summary {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.synthesis-acc > .synthesis-col-list,
+.synthesis-acc > .synthesis-col-empty {
+  padding: 6px 8px;
+}
+
+.claim-list {
+  list-style: decimal;
+  padding-left: 20px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.claim-row {
+  font-size: 12px;
+  color: var(--fg-1);
+}
+
+.claim-text {
+  color: var(--fg-0);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.claim-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+
+.claim-evidence {
+  font-family: var(--mono);
+  word-break: break-word;
+}
+
+.claim-risk {
+  color: #e08a8a;
+  word-break: break-word;
+}
+
+.synthview-demo {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  overflow: auto;
+}
+
+.synthview-demo-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.synthview-demo-hint {
+  font-size: 11px;
+  color: var(--fg-2);
+}
+
 @media (max-width: 900px) {
   .workbench {
     grid-template-columns: 1fr;
