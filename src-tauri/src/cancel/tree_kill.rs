@@ -86,6 +86,7 @@ mod tests {
             pid,
             aborted: AtomicBool::new(false),
             abort_tx,
+            timed_out_pending: Arc::new(AtomicBool::new(false)),
             stdin_tx: TokioMutex::new(None),
             exit_watch: exit_rx,
         };

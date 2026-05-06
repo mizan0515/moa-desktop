@@ -80,6 +80,7 @@ impl ProcessRunner for ScriptRunner {
             pid: 1,
             aborted: AtomicBool::new(false),
             abort_tx,
+            timed_out_pending: Arc::new(AtomicBool::new(false)),
             stdin_tx: Mutex::new(stdin_handle),
             exit_watch: exit_rx,
         });

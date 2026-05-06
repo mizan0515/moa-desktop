@@ -52,6 +52,8 @@ describe("adviceForErrorKind", () => {
   it("maps every kind to a non-empty advice triple", () => {
     const kinds = [
       "cli-missing",
+      "permission-denied",
+      "spawn",
       "auth-expired",
       "quota",
       "network",

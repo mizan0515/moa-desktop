@@ -117,6 +117,18 @@ export function adviceForErrorKind(kind: ProcessErrorKind): ErrorAdvice {
         detail: "The Claude or Codex CLI binary could not be spawned. PATH may be missing the install dir.",
         remedy: "Verify `claude.exe` / `codex.exe` are installed and on PATH.",
       };
+    case "permission-denied":
+      return {
+        title: "Permission denied",
+        detail: "The OS refused to spawn the CLI binary (EACCES). It may be blocked by AV/EDR, lack the execute bit, or live on a non-executable path.",
+        remedy: "Check file permissions / antivirus quarantine for the CLI binary and retry.",
+      };
+    case "spawn":
+      return {
+        title: "Spawn failed",
+        detail: "The OS rejected the spawn for an unclassified reason (not missing, not permission). See Logs for the underlying io::Error.",
+        remedy: "Inspect the error detail; common causes are too many open processes or a corrupt binary.",
+      };
     case "auth-expired":
       return {
         title: "Authentication expired",

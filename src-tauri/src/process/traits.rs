@@ -144,6 +144,10 @@ pub struct ProcessControlInner {
     pub pid: u32,
     pub aborted: AtomicBool,
     pub abort_tx: mpsc::Sender<()>,
+    /// Set to `true` by `wait(Some(d))` immediately before the timer-induced
+    /// abort fires, so the supervisor classifies the resulting exit as
+    /// `Timeout` (not `Killed`). Shared with the supervisor task.
+    pub timed_out_pending: Arc<AtomicBool>,
     pub stdin_tx: Mutex<Option<mpsc::Sender<StdinCommand>>>,
     pub exit_watch: watch::Receiver<Option<ProcessExit>>,
 }
@@ -210,8 +214,17 @@ impl ProcessControl {
             Some(d) => match tokio::time::timeout(d, wait_fut).await {
                 Ok(r) => r,
                 Err(_) => {
-                    // Timer fired first — abort and re-await for the supervisor's
-                    // confirmation (which will carry `timed_out=true`).
+                    // Timer fired first — set the shared `timed_out_pending`
+                    // flag BEFORE sending abort, so the supervisor records
+                    // `timed_out=true` in the published `ProcessExit` once.
+                    // This means EVERY waiter (this caller, sibling
+                    // `wait()` calls, the watch receiver in T7's
+                    // orchestrator) sees a consistent classification —
+                    // we no longer mutate a single caller's local copy
+                    // (defect B-2 fix).
+                    self.inner
+                        .timed_out_pending
+                        .store(true, Ordering::SeqCst);
                     let _ = self.abort().await;
                     let mut rx2 = self.inner.exit_watch.clone();
                     let final_fut = async move {
@@ -227,11 +240,7 @@ impl ProcessControl {
                             }
                         }
                     };
-                    let mut e = final_fut.await?;
-                    // Mark as timed_out (supervisor would have set aborted=true).
-                    e.timed_out = true;
-                    e.kind = Some(ProcessErrorKind::Timeout);
-                    Ok(e)
+                    final_fut.await
                 }
             },
         }
