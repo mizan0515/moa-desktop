@@ -1,21 +1,25 @@
-const dummyLogs = [
-  { ts: "12:00:01", lane: "system", msg: "preflight ok (claude.exe, codex.exe resolved)" },
-  { ts: "12:00:02", lane: "claude", msg: "first-pass start (read-only)" },
-  { ts: "12:00:02", lane: "codex", msg: "first-pass start (sandbox=read-only)" },
-  { ts: "12:00:18", lane: "claude", msg: "diagnosis emitted, 4 risks flagged" },
-  { ts: "12:00:21", lane: "codex", msg: "diagnosis emitted, alternative B preferred" },
-  { ts: "12:00:25", lane: "system", msg: "synthesis (5-column) ready" },
-];
-
-type Lane = "system" | "claude" | "codex";
+// T1 placeholder, wired by T7-thin to stream live dry-run events.
+import { useSyncExternalStore } from "react";
+import { dryRunStore } from "../../lib/orchestrator/dryRun";
 
 export default function LogPane() {
+  useSyncExternalStore(dryRunStore.subscribe, dryRunStore.getSnapshot);
+  const sess = dryRunStore.getActive();
+
+  if (!sess || sess.logs.length === 0) {
+    return (
+      <p style={{ color: "var(--fg-2)", fontSize: 12 }}>
+        Logs will stream here once a session is running.
+      </p>
+    );
+  }
+
   return (
     <div>
-      {dummyLogs.map((l, i) => (
+      {sess.logs.map((l, i) => (
         <div key={i} className="log-row">
           <span className="log-ts">{l.ts}</span>
-          <span className={`log-lane ${l.lane as Lane}`}>{l.lane}</span>
+          <span className={`log-lane ${l.lane}`}>{l.lane}</span>
           <span className="log-msg">{l.msg}</span>
         </div>
       ))}

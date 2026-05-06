@@ -32,6 +32,11 @@ pub fn run() {
     }
 
     builder
+        .manage(orchestrator::dryrun::DryRunCoordinator::new())
+        .invoke_handler(tauri::generate_handler![
+            orchestrator::dryrun::dryrun_start,
+            orchestrator::dryrun::dryrun_cancel,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
