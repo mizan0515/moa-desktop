@@ -1,0 +1,6 @@
+{"event":"start","worker":"claude","phase":"firstpass","ts":"2026-05-06T10:00:00Z"}
+{"event":"claim","id":"c1","text":"REST endpoints SHOULD use plural nouns (e.g. /users) per Fielding's dissertation (Ch.5).","citations":[{"url":"https://www.ics.uci.edu/~fielding/pubs/dissertation/rest_arch_style.htm","excerpt":"Resources are identified..."}],"confidence":"high","applicability":"server-side HTTP APIs"}
+{"event":"claim","id":"c2","text":"Idempotent methods (GET/PUT/DELETE) MUST be safe to retry; POST is not idempotent unless explicitly designed.","citations":[{"url":"https://datatracker.ietf.org/doc/html/rfc9110#section-9.2.2","excerpt":"A request method is considered idempotent if..."}],"confidence":"high","applicability":"all HTTP/1.1 services"}
+{"event":"claim","id":"c3","text":"Pagination via cursor (opaque token) outperforms offset-based for large datasets — offset N requires scanning N rows.","citations":[{"url":"https://use-the-index-luke.com/no-offset","excerpt":"OFFSET makes the database read..."}],"confidence":"med","applicability":"datasets >10k rows"}
+{"event":"open_question","id":"q1","text":"Should error envelope follow RFC 9457 (Problem Details) or a custom JSON shape?"}
+{"event":"end","status":"ok"}

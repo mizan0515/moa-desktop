@@ -1,0 +1,6 @@
+{"event":"start","worker":"codex","phase":"firstpass","ts":"2026-05-06T10:00:00Z"}
+{"event":"claim","id":"c1","text":"REST endpoints conventionally use plural nouns; some style guides (Microsoft REST Guidelines) explicitly require it.","citations":[{"url":"https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md","excerpt":"Use plural nouns for collections."}],"confidence":"high","applicability":"server-side HTTP APIs"}
+{"event":"claim","id":"c4","text":"GraphQL eliminates over-fetching by letting clients request exact field sets — measurable 30-60% payload reduction in mobile-heavy products.","citations":[{"url":"https://graphql.org/learn/best-practices/","excerpt":"Clients request exactly..."}],"confidence":"med","applicability":"client-driven payload optimization, mobile"}
+{"event":"claim","id":"c5","text":"Cursor pagination is correct for sorted feeds, but offset pagination is acceptable when total count must be exposed for UI page selectors.","citations":[{"url":"https://slack.engineering/evolving-api-pagination-at-slack/","excerpt":"We initially used offset..."}],"confidence":"med","applicability":"UI with discrete page selector"}
+{"event":"open_question","id":"q2","text":"Versioning via URL path vs header — which has lower client-migration cost?"}
+{"event":"end","status":"ok"}

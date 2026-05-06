@@ -1,0 +1,8 @@
+{"event":"start","phase":"synthesis","ts":"2026-05-06T10:01:00Z"}
+{"event":"row","column":"verified","claim":"REST endpoints SHOULD use plural nouns for collections.","sources":["claude:c1","codex:c1"],"confidence":"high"}
+{"event":"row","column":"codex_only","claim":"GraphQL reduces over-fetching by 30-60% on mobile.","sources":["codex:c4"],"confidence":"med","note":"Claude did not investigate GraphQL angle."}
+{"event":"row","column":"claude_only","claim":"POST is not idempotent unless explicitly designed.","sources":["claude:c2"],"confidence":"high","note":"Codex did not raise idempotency."}
+{"event":"row","column":"disagreement","topic":"pagination strategy","claude_position":"cursor preferred for >10k rows (perf)","codex_position":"offset acceptable when total-count UI is required","resolution":"context-dependent — both valid"}
+{"event":"row","column":"open","question":"Error envelope: RFC 9457 vs custom?","raised_by":"claude:q1"}
+{"event":"row","column":"open","question":"Versioning via URL path vs header — which has lower client-migration cost?","raised_by":"codex:q2"}
+{"event":"end","status":"ok"}
