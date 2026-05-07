@@ -19,13 +19,34 @@ import type {
   VerifiedRow,
 } from "../synthesisTypes";
 import { jaccard, SIMILARITY_THRESHOLD } from "./similarity";
-import type { WorkerClaim, WorkerOutput } from "./types";
+import type { ClaimAttempt, WorkerClaim, WorkerOutput } from "./types";
 import { topicKey } from "./types";
 
 const CONF_RANK: Record<Confidence, number> = { high: 2, med: 1, low: 0 };
 
 function minConf(a: Confidence, b: Confidence): Confidence {
   return CONF_RANK[a] <= CONF_RANK[b] ? a : b;
+}
+
+// FIX-E: claims tagged UNVERIFIED by the worker must not enter the verified
+// column even if both sides agree on the text. Coerce confidence to "low" so
+// the existing both-low / mixed-low rules handle them deterministically.
+const UNVERIFIED_RE = /\[UNVERIFIED\]|\bUNVERIFIED\s*:?/gi;
+function isUnverified(claim: WorkerClaim): boolean {
+  // Reset lastIndex — global flag retains state across .test() calls.
+  UNVERIFIED_RE.lastIndex = 0;
+  return UNVERIFIED_RE.test(claim.text);
+}
+function stripUnverifiedMarker(text: string): string {
+  return text.replace(UNVERIFIED_RE, "").replace(/\s+/g, " ").trim();
+}
+function normalizeClaim(claim: WorkerClaim): WorkerClaim {
+  if (!isUnverified(claim)) return claim;
+  return {
+    ...claim,
+    text: stripUnverifiedMarker(claim.text),
+    confidence: "low",
+  };
 }
 
 function citationsToSources(claim: WorkerClaim): string[] {
@@ -169,10 +190,23 @@ function dedupe(arr: string[]): string[] {
   return Array.from(new Set(arr));
 }
 
+function snapshotOf(c: WorkerClaim): ClaimAttempt {
+  return {
+    text: c.text,
+    confidence: c.confidence,
+    citations: [...c.citations],
+    attempt: c.attempt,
+  };
+}
+
 /**
  * Append a retry attempt: same-`id` claims accumulate citations and take the
- * higher confidence; new ids are added. Open questions dedupe by id.
+ * higher confidence on the top-level fields; full per-attempt history is
+ * preserved on `attempts[]`. New ids are added. Open questions dedupe by id.
  * Pure — returns a new `WorkerOutput`.
+ *
+ * FIX-E: prior attempts are no longer overwritten. `attempts[]` holds a
+ * chronological snapshot list so a downgrade or text revision is recoverable.
  */
 export function appendAttempt(prev: WorkerOutput, next: WorkerOutput): WorkerOutput {
   if (prev.worker !== next.worker) {
@@ -181,15 +215,27 @@ export function appendAttempt(prev: WorkerOutput, next: WorkerOutput): WorkerOut
     );
   }
   const claimsById = new Map<string, WorkerClaim>();
-  for (const c of prev.claims) claimsById.set(c.id, { ...c, citations: [...c.citations] });
+  for (const c of prev.claims) {
+    const cloned: WorkerClaim = {
+      ...c,
+      citations: [...c.citations],
+      attempts: c.attempts ? [...c.attempts] : [snapshotOf(c)],
+    };
+    claimsById.set(c.id, cloned);
+  }
   for (const c of next.claims) {
     const existing = claimsById.get(c.id);
     if (!existing) {
-      claimsById.set(c.id, { ...c, citations: [...c.citations] });
+      claimsById.set(c.id, {
+        ...c,
+        citations: [...c.citations],
+        attempts: c.attempts ? [...c.attempts] : [snapshotOf(c)],
+      });
       continue;
     }
-    // Merge: union citations (by url+excerpt), keep higher confidence,
-    // prefer later text only if confidence strictly improved.
+    // History: always record this attempt verbatim, regardless of conf delta.
+    existing.attempts!.push(snapshotOf(c));
+    // Citations: union by url+file+line+excerpt key.
     const seen = new Set(existing.citations.map((x) => `${x.url ?? ""}|${x.file ?? ""}|${x.line ?? ""}|${x.excerpt ?? ""}`));
     for (const cit of c.citations) {
       const k = `${cit.url ?? ""}|${cit.file ?? ""}|${cit.line ?? ""}|${cit.excerpt ?? ""}`;
@@ -198,6 +244,7 @@ export function appendAttempt(prev: WorkerOutput, next: WorkerOutput): WorkerOut
         seen.add(k);
       }
     }
+    // Top-level fields: keep higher-confidence text/conf as the primary view.
     if (CONF_RANK[c.confidence] > CONF_RANK[existing.confidence]) {
       existing.confidence = c.confidence;
       existing.text = c.text;
@@ -234,16 +281,19 @@ export function synthesize(claude: WorkerOutput, codex: WorkerOutput): Synthesis
     open: [],
   };
 
-  // Cluster claims by topic key.
+  // Cluster claims by topic key. UNVERIFIED claims are normalized to low conf
+  // up front so downstream pair classification handles them correctly.
   const topics = new Set<string>();
   const claudeByTopic = new Map<string, WorkerClaim[]>();
   const codexByTopic = new Map<string, WorkerClaim[]>();
-  for (const c of claude.claims) {
+  for (const raw of claude.claims) {
+    const c = normalizeClaim(raw);
     const k = topicKey(c);
     topics.add(k);
     (claudeByTopic.get(k) ?? claudeByTopic.set(k, []).get(k)!).push(c);
   }
-  for (const c of codex.claims) {
+  for (const raw of codex.claims) {
+    const c = normalizeClaim(raw);
     const k = topicKey(c);
     topics.add(k);
     (codexByTopic.get(k) ?? codexByTopic.set(k, []).get(k)!).push(c);
