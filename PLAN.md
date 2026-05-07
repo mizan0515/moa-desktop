@@ -59,6 +59,8 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 
 **원칙**: 사용자는 작업 텍스트 1번 입력 + 마지막 apply confirm 1번 클릭. 그 사이 모든 결정은 orchestrator (T7-full) 가 자동. 관리자 중재는 **2개 trigger 에서만**: (1) 아키텍처 tradeoff 충돌, (2) max 3 round 초과.
 
+**예외 (§ 0.6 T13)**: DestructiveNetwork class slash 명령 (`/메인동기화`, `/백로그`, `/병행통합` 의 PR 생성/머지 step) 은 step-gate confirm 우선. 예외 사유: 외부 시스템 (GitHub, 원격 main) 변경은 단일 apply confirm 로 batch 하기엔 blast radius 큼. step 별 사용자 결정 필요.
+
 ### 자동 실행 sequence (Flow C 기준 — 큰 코드 변경)
 1. preflight (CLI 검증, auth, version, sandbox) — 자동
 2. **first-pass × 2 병렬** (T5a Claude read-only + T5b Codex read-only, 양쪽 web search + deep thinking 활성) — 자동
@@ -83,9 +85,10 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 12. 사용자 confirm 클릭 → main repo 에 patch apply
 13. lock release + journal flush + 세션 left panel 에 archived
 
-### 사용자 개입 지점 (총 2 곳)
+### 사용자 개입 지점 (총 2 곳, T13 DestructiveNetwork 명령 예외)
 - **시작**: 작업 텍스트 입력 + Run 클릭 (1회)
 - **끝**: final report 보고 patch apply 또는 reject (1회)
+- **예외**: `/메인동기화` (4-5 step), `/백로그` (3 step), T12 `/병행통합` PR 생성·머지 step — 각 step 사용자 confirm. 단일 apply confirm 와 별개.
 
 ### Manager intervention 필요 시 (자동 멈춤 + UI 명시)
 - 아키텍처 tradeoff 충돌 (Claude/Codex 가 근본적으로 다른 방향)
@@ -97,6 +100,26 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 ### "양측 모두 web search · deep thinking · file edit" 보장
 - Claude Worker: read-only 모드 — `--allowedTools "Read" "WebSearch" "WebFetch" "Bash(git:*)" "Bash(rg:*)"`. Mutation 모드 — `+ "Edit" "Write"`. Deep thinking — prompt 에 "think hard" 또는 `MAX_THINKING_TOKENS=10000` env.
 - Codex Worker: read-only — `--sandbox read-only -c model_reasoning_effort='high' -c tools.web_search=true`. Mutation — `--sandbox workspace-write` 동일 reasoning + web_search.
+
+## 0.6 v1.5 Prequel — Policy & Lifecycle EPIC (T13, 2026-05-07 사용자 비전 검증 결과)
+
+T10 진입 전 필수 보강. 사용자 결정:
+- **Q1·B**: `settings.primaryRole = "claude" | "codex"`. Codex 선택 시 synthesizer / default reviewer / Flow-C mutation owner 까지 Codex 로 스왑. lock state machine 은 이미 대칭 (`lock/manager.rs:45-47`) — 변경 X.
+- **Q2·단계별 confirm**: `/메인동기화` 류 destructive-network 명령은 4-5 step 사용자 확인. **자동화-2-개입 원칙 (§ 0.5)** 의 명시적 예외 — destructive scope 가 큰 명령은 step gate 우선.
+- **Q3·앱 backlog SOT**: 앱 내부 backlog 가 source of truth, `~/.claude/projects/<repo>/memory/` 는 단방향 mirror (앱 → 글로벌). 사용자가 다른 프로젝트에서 글로벌 read 가능.
+- **추가요구**: 병행티켓 흐름 (T10/T11/T12) 의 PR 생성/머지 단계마다 **Codex adversarial-review 의무** 를 prompt 에 박는다. PrimaryRole=Codex 시 Claude review 가 추가됨 (대칭 운영).
+- **글로벌 sync**: 글로벌 **15 파일** (Hot 룰 6 = `CLAUDE/RTK/KARPATHY/TOKEN-GUARD/TICKET-CLOSE/CODEX-MCP` + On-demand 스킬 2 = `skills/{codex-mcp-runtime,token-guard-internals}/SKILL.md` + 한국어 단축명령 7) 변경분은 hash drift detect → 사용자 명시 import. 자동 적용 X. PolicyPack 은 `source_manifest[]` + kind discriminator (HotRule / OnDemandSkill / TicketCloseRule / RuntimeHealthCheck) 로 표현 — 글로벌이 또 분리되어도 schema 변경 불요.
+
+EPIC 구조 (단일 ticket T13, 5 phase):
+- **L1** PrimaryRole + ExecutionPolicy (orchestrator hardcode 제거)
+- **L2** SafetyPolicy + Role-aware Output Scanner (DESIGN.md:90-92 코드화)
+- **L3** Policy Pack (executable schema, markdown copy 아님)
+- **L4** Privileged Slash Command Subsystem (UI dispatcher, 워커 슬래시는 disabled 유지)
+- **L5** Resume Packet & Session Lifecycle (`.claude-handoff.md` 대체, T11 multi-lane 토대)
+
+상세: [TICKETS/T13-policy-lifecycle-epic.md](TICKETS/T13-policy-lifecycle-epic.md).
+
+T10/T11/T12 는 본 EPIC 통과 후 Phase 6 원안대로 진행. 단 T10/T11/T12 본문에 "PR 생성/머지 단계 Codex review 의무" 1 줄 amend 됨 (본 결정 반영).
 
 ## 1. Implementation phases (value-incremental, 5-7주 1인)
 
