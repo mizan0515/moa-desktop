@@ -43,5 +43,5 @@
 ## 현재 진행 상태 (latest)
 - Branch: `feat/T1-scaffold` (T1 in-flight)
 - Phase: 1 (walking skeleton)
-- 최근 결정: v1.5 에 multi-project tabs + 다중 티켓 동시 실행 (T10/T11/T12) 추가, single-app-instance 모델 채택
-- 자세한 ticket dependency 는 [PLAN.md](PLAN.md) § 2, § 3, § Phase 6
+- 최근 결정: v1.6 에 Pi 자체를 MoA parent-owned third harness runtime 으로 편입 (T15), 이후 T10/T11/T12 는 `runtimeKind: claude|codex|pi` 를 소비하는 Pi-aware multi-ticket 흐름으로 amend
+- 자세한 ticket dependency 는 [PLAN.md](PLAN.md) § 0.7, § 2, § 3, § Phase 6/7
