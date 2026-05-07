@@ -198,14 +198,14 @@ L3 의 sync 메커니즘이 base. 단 사용자 명시 추가:
 
 **Pin 후 운영**:
 - `policy.json` (active) 은 baseline 으로부터 resolve 됨.
-- 글로벌 12 개 파일 변경 → sync.rs 가 baseline 의 sha256 와 비교 → drift report.
+- 글로벌 15 개 파일 변경 → sync.rs 가 baseline 의 sha256 와 비교 → drift report (kind 별 group: HotRule 6, OnDemandSkill 2 + 단축명령 7).
 - 사용자 import 시 새 buffered pack 으로 swap, 단 baseline 자체는 **불변** (history pin).
 - 차후 baseline 갱신 필요 시: 새 파일 `baseline-<date>.json` 추가, 기존은 archive (rolling baseline).
 
 **Success criteria 추가** (L3 phase):
-- [ ] `Init baseline` 명령 → 12 개 파일 hash + excerpt 캡처 → `baseline-<today>.json` 작성.
+- [ ] `Init baseline` 명령 → 15 개 파일 (Hot 6 + on-demand 2 + 단축명령 7) hash + excerpt + kind + role 캡처 → `baseline-<today>.json` 작성.
 - [ ] baseline 누락 또는 schema 불일치 시 sync.rs fail-soft (manual mode 강제).
-- [ ] 12 개 중 일부 파일 미존재 (예: `RTK.md` 없는 환경) → null 로 기록 + warning.
+- [ ] 15 개 중 일부 파일 미존재 (예: `~/.claude/skills/codex-mcp-runtime/SKILL.md` 없는 환경 — Layer 2/3 patch 미적용) → null 로 기록 + warning + kind 별 critical 여부 판단 (HotRule 누락 = blocker, OnDemandSkill 누락 = warning).
 
 ## NEVER 영역 (본 ticket 내내)
 - src-tauri/src/{adapters,git,journal,synthesis (T3 결정론적 merge 본체),process,telemetry,cancel,mock,lock (state machine 본체)}/ 본문 — 본 ticket 은 **policy/safety/commands/lifecycle 신규** 만.

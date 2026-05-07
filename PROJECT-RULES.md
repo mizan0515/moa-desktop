@@ -28,7 +28,7 @@
 - `skills/메인동기화/SKILL.md`, `skills/백로그/SKILL.md` — destructive-network
 - `skills/병행통합/SKILL.md`, `skills/병행티켓/SKILL.md` — T10/T12 reference
 
-위 **15 파일** (Hot 6 + On-demand 9) 은 T13 L3 의 baseline pin 대상 — `~/.moa-desktop/policy/baseline-<date>.json` 에 hash 로 박힘. 각 파일은 `source_manifest[]` 의 entry 로 `{path, kind, sha256, size_bytes}` 형태 저장.
+위 **15 파일** (Hot 룰 6 + On-demand 스킬 2 + 한국어 단축명령 7) 은 T13 L3 의 baseline pin 대상 — `~/.moa-desktop/policy/baseline-<date>.json` 에 hash 로 박힘. 각 파일은 `source_manifest[]` 의 entry 로 `{path, kind, role, sha256, size_bytes}` 형태 저장 (`role` ∈ `SourceRole` enum: GuardClaude / GuardCodex / GuardShared / OutputScannerSource / TokenThreshold / HandoffPolicy / CloseGate / RuntimePatch / SlashCommandReference — T13 ticket § L3 schema 참조).
 
 ## NEVER 영역 (모든 worker 공통)
 - 비밀 파일: `.env`, `*credentials*`, `*cookie*`, `pipeline_config.json`, `auth.json`
