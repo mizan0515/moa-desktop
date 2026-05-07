@@ -24,6 +24,10 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T11\)" | wc -l
 
 [INDEPENDENT FIRST-PASS — read-only]
 
+## T15 Pi runtime amend
+
+T12 는 T11 lane result 의 `runtimeKind`, permission, capability manifest, package trust state 를 검증한다. Pi advisory review 나 Pi extension 결과는 merge 판단의 참고 신호일 수 있지만 mandatory `CodexAdversarialXHigh` gate 를 대체할 수 없다. Pi package install/update/hot reload 요청이 lane result 에 남아 있으면 user confirm/pinned source/sha256/capability manifest/mutation lock evidence 가 없을 때 `ReviewRunError` 또는 policy blocked 로 stop 한다.
+
 ## Goal
 T11 의 N lane 이 모두 완료된 후:
 1. T10 가 emit 한 **머지 순서** 따라 patch apply
@@ -52,6 +56,7 @@ T11 의 N lane 이 모두 완료된 후:
 - [ ] Review gate: mandatory `CodexAdversarialXHigh` `ReviewVerdict::Clean` 인 경우만 PR create/merge/integrate/main apply 진행. `Concern`, `Block`, `ReviewRunError` 는 STOP + 한국어 보고. PrimaryRole=Codex 의 ClaudeSymmetry 는 추가 신호이며 `CodexAdversarialXHigh` 를 대체하지 않음.
 - [ ] Review input: T13 `ReviewInputStrategy` 로 diff 크기별 chunking 수행. 50KB 미만 단일 review, 초과 시 critical files 우선 + omitted_files 표시.
 - [ ] ReviewRunRecord persistence: 각 gate 의 T13 L2.5 full audit field set (`verdict`, `reviewer`, `review_kind`, `review_profile_id`, `reasoning_effort`, `model_or_profile_id`, `prompt_template_version`, `prompt_hash`, `command_source_adapter`, `primary_role`, `scope`, `gate`, `patch_hash`, `files_reviewed`, `omitted_files`, `limitations`, `evidence`, `required_actions`, `created_at`, `source_output_path`) 를 journal, ResumePacket, PR/merge 보고에 저장. lane result 에서 필드가 빠졌거나 `CodexAdversarialXHigh` 필수 field 가 비어 있으면 merge/apply 를 skip 하지 말고 `ReviewRunError` 로 stop.
+- [ ] Runtime result validation: 모든 lane 의 `runtimeKind` 와 permission class 를 검증한다. `runtimeKind="pi"` lane 은 `PiRpcAdapter`/`PiSdkHost` capability evidence, package trust state, extension UI capability blocked/allowed record 를 포함해야 하며 누락 시 stop 한다.
 - [ ] Nested peer-call 차단: integrator worker/lane output 에 peer AI 직접 호출 패턴이 있으면 T13 L2 scanner 가 차단하고 merge 중단.
 - [ ] 성공 시 cleanup: 모든 N worktree `git worktree remove` (force flag 만 사용 X — 미커밋 변경 있으면 사용자 confirm)
 - [ ] integration test: 4 lane → 5 ticket 머지 → 3 번째에서 충돌 → stop 보고 → 사용자 resume → 완료
@@ -109,7 +114,7 @@ T11 의 N lane 이 모두 완료된 후:
 ## Worker prompt cross-contract fields
 - GitHub/project handling: GitHub #17 / Project `MoA Desktop` card status 를 claim/complete 단계에서 갱신한다. PR 생성/머지 step 이 포함되면 각 step 전 사용자 confirm 과 review gate record 를 남긴다.
 - Conflict matrix ownership: T12 owns 는 `src-tauri/src/integrator/*`, `src/components/IntegratePanel.tsx`, `src-tauri/tests/integrator_*.rs` 로 한정한다. T10/T11/T13 및 shared adapter/orchestrator body 는 read-only 이며, conflict 발생 시 자동 해결하지 않고 한국어 stop report 로 넘긴다.
-- Dependency/merge order: T10 `mergeOrder` 를 source of truth 로 사용하고, T11 lane result 의 `dependencyGraphRef`, `conflictMatrixRef`, `reviewRunRecords` 를 검증한 뒤 적용한다. T11 완료 전 T12 시작 금지.
+- Dependency/merge order: T10 `mergeOrder` 를 source of truth 로 사용하고, T11 lane result 의 `dependencyGraphRef`, `conflictMatrixRef`, `runtimeKind`, `runtimeCapabilities`, `reviewRunRecords` 를 검증한 뒤 적용한다. T11 완료 전 T12 시작 금지.
 - Review gate warning: lead/orchestrator-owned `CodexAdversarialXHigh` 가 `Clean` 을 반환하고 `source_output_path` 가 persisted 되기 전에는 `pr_create`, `pr_merge`, `integrate_merge`, `main_apply` 진행 금지. worker 는 직접 peer review 를 실행하지 않는다.
 
 [작업 완료 시 — 무조건 이 순서로]

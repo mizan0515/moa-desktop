@@ -8,10 +8,13 @@ GitHub: #29 (https://github.com/mizan0515/moa-desktop/issues/29)
 
 중요한 경계: 여기서 "peer" 는 worker 가 다른 worker 를 직접 호출한다는 뜻이 아니다. 모든 cross-AI dispatch 는 UI 또는 앱 orchestrator 가 수행한다. Worker 내부에서 `/codex:*`, `claude -p`, `codex exec`, Claude MCP/Codex MCP 를 호출하는 nested peer-call 은 T13 L2 scanner 가 차단한다.
 
+T15 이후 Pi 도 conversational candidate runtime 이다. Pi 는 parent-owned `HarnessRuntime` 이며 worker 내부 peer-call 이 아니다. Pi conversational lane 은 `runtimeKind="pi"` 로 표시되고 `PiRpcAdapter` 또는 `PiSdkHost` capability gate 가 available 일 때만 활성화된다.
+
 ## 의존성
 
 - T13 L1-L5 통과 후 진입.
 - 특히 L2 scanner, L2.5 ReviewVerdict/ReviewInputStrategy, L4 slash dispatcher, L5 ResumePacket 이 토대.
+- Pi lane support 는 T15f model/session tree 이후 활성화한다. 그 전에는 schema/commentary 만 보존한다.
 
 ## Goal
 
@@ -24,6 +27,7 @@ GitHub: #29 (https://github.com/mizan0515/moa-desktop/issues/29)
 - [ ] Turn-level intervention: 사용자가 진행 중 worker 를 stop/pause 하고, ResumePacket state carryover 로 새 worker turn 에 redirect 메시지를 전달 가능. mutation lock 보유 중 redirect 는 safety scanner 와 lock state 가 상태 확인.
 - [ ] Worker-to-user question: worker 가 `<ASK_USER>...</ASK_USER>` marker 를 내보내면 UI input 으로 답변을 받아 새 worker turn 에 state + 답변을 전달. 동일 worker stream 주입은 interactive/resumable adapter 구현 전까지 scope 밖.
 - [ ] Peer dispatch boundary: 사용자가 UI 에서 "Codex 검토" 또는 "Claude 검토" 를 누르면 앱/orchestrator 가 호출. worker output 의 nested peer-call 패턴은 차단.
+- [ ] Pi conversational lane: `runtimeKind="pi"` lane 은 read-only/research/conversational permission 으로만 시작하며 package install/update/hot reload 요청은 blocked/confirm-needed event 로 표시한다.
 - [ ] ResumePacket: conversational turn history, pending user questions, thinking collapsed state, review gate verdict 를 저장/복원.
 - [ ] Review gate: `pr_create`, `pr_merge`, `integrate_merge`, `main_apply` 전 mandatory `CodexAdversarialXHigh` `ReviewVerdict::Clean` 만 진행. current-session advisory 는 gate 증거가 아니며, lead/orchestrator-owned `source_output_path` 가 남아야 한다.
 - [ ] Integration test: mode toggle, thinking collapse, spawn-new-turn ask-user roundtrip, turn-level redirect, nested peer-call scanner/command_guard block.

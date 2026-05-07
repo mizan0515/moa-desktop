@@ -24,6 +24,10 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 
 [INDEPENDENT FIRST-PASS — read-only]
 
+## T15 Pi runtime amend
+
+본 ticket 은 T15 이후 `runtimeKind: "claude" | "codex" | "pi"` 를 schema 로 보존한다. Decomposer 는 각 generated ticket 에 preferred/allowed runtime, permission class, capability manifest requirement 를 넣을 수 있지만 Pi 를 worker 내부 tool 로 호출하는 prompt 를 만들면 안 된다. Pi lane 은 T15 capability gate 통과 전까지 read-only/research/reviewer/conversational 후보로만 표시하고, mandatory `CodexAdversarialXHigh` review gate 는 계속 lead/orchestrator-owned 로 유지한다.
+
 ## Goal
 사용자 입력 = 큰 작업 텍스트 ("백로그 정리", "전체 refactor", "feature X 추가") → 본 ticket 의 decomposer 가:
 1. 양측 MoA first-pass (T5a + T5b) 로 작업 분석
@@ -46,6 +50,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
     "tickets": [{
       "id": "T1",
       "title": "...",
+      "runtime": {"runtimeKind": "claude|codex|pi", "permission": "read-only|reviewer|conversational|mutation-owner", "capabilityManifestRequired": true},
       "owns": [...],
       "deps": [...],
       "sixMandatoryFields": {"successCriteria": [...], "neverAreas": [...], "validationCmd": "...", "filesAndLines": [...], "alternatives": [...], "testsFirst": true},
@@ -74,6 +79,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 - [ ] 충돌 검증: 분해 결과의 각 ticket owns 가 disjoint (집합 intersection 0), 모든 NEVER 영역에 다른 ticket 의 owns 포함, 의존 그래프에 cycle 없음 → 깨지면 사용자에 보고
 - [ ] 생성된 paste-ready worker prompt 의 [작업 완료 시] 에 "lead/orchestrator-owned mandatory `CodexAdversarialXHigh` review gate Clean 전 `pr_create`, `pr_merge`, `integrate_merge`, `main_apply` 진행 금지" 안내가 들어감.
 - [ ] 생성된 paste-ready worker prompt 의 worker 실행 영역에는 peer AI 직접 호출 패턴(`/codex:`, `claude -p`, `codex exec`, `Claude MCP`, `Codex MCP`) 이 들어가지 않음. 앱 review 는 T13 L2.5/L4 가 source=orchestrator 로 수행하고, Codex Desktop 수동 개발 review 는 lead PowerShell 에서 worker 밖 별도 프로세스로 수행한다.
+- [ ] Pi-aware ticket schema: 각 ticket 은 `runtime.runtimeKind`, permission class, capability manifest 필요 여부를 보존한다. `runtimeKind="pi"` 는 Pi adapter/capability gate 가 없으면 queued/blocked 로 표시하며 worker prompt 에 `pi install`, `pi update`, package `/reload` 자동 실행 문구를 넣지 않는다.
 - [ ] 글로벌 `/병행티켓` 출력 계약 10 섹션(현재 상태 요약, inventory, 분해 전략, 의존 그래프, 충돌 매트릭스, 진행 가이드, Phase 별 prompt, 머지 순서, Open questions, 사고 방지)을 schema 로 보존한다.
 - [ ] GitHub issue/project 등록 metadata 와 Phase 사이 행동(`PR 머지 + git pull origin main`) 이 누락되지 않는다.
 - [ ] settings 에 분해 결과 저장 (`~/.moa-desktop/decompositions/<projectId>/<timestamp>.json`)
@@ -131,7 +137,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 ## Worker prompt cross-contract fields
 - GitHub/project handling: 생성된 모든 ticket 에 GitHub issue number, Project `MoA Desktop` status, claim/complete command 또는 수동 처리 방식을 포함한다. T10 자체는 GitHub #15 card 를 완료 처리한다.
 - Conflict matrix ownership: 각 ticket 의 `owns` 는 disjoint 이어야 하며, 다른 ticket owns 는 해당 prompt 의 NEVER 영역과 conflict matrix 에 금지로 들어간다. 충돌이 있으면 사용자에게 수정 UI 를 표시하고 자동 병행 실행하지 않는다.
-- Dependency/merge order: `dependencyGraph` cycle 이 없어야 하며, `mergeOrder` 와 `phaseGuide.betweenPhaseAction = "PR 머지 + git pull origin main"` 을 T11/T12 입력으로 보존한다.
+- Dependency/merge order: `dependencyGraph` cycle 이 없어야 하며, `mergeOrder` 와 `phaseGuide.betweenPhaseAction = "PR 머지 + git pull origin main"` 을 T11/T12 입력으로 보존한다. runtimeKind 는 dependency graph 의 scheduling hint 이며 owns 충돌을 우회하는 권한이 아니다.
 - Review gate warning: lead/orchestrator-owned `CodexAdversarialXHigh` 가 `Clean` 을 반환하고 `source_output_path` 가 persisted 되기 전에는 `pr_create`, `pr_merge`, `integrate_merge`, `main_apply` 진행 금지. worker prompt 는 직접 peer review 를 실행하지 않는다.
 
 [작업 완료 시 — 무조건 이 순서로]
