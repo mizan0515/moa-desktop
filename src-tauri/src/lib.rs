@@ -51,6 +51,7 @@ pub fn run() {
             orchestrator::dryrun::dryrun_start,
             orchestrator::dryrun::dryrun_cancel,
             orchestrator::orch_start,
+            orchestrator::orch_ack,
             orchestrator::orch_cancel,
             orchestrator::orch_submit_synthesis,
             orchestrator::orch_confirm_mutation,

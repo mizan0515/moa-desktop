@@ -21,14 +21,14 @@ pub mod verify;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::adapters::{
     claude::{ClaudeAdapter, ClaudeEvent, FirstPassRequest as ClaudeFirstPass},
@@ -43,6 +43,15 @@ use self::state::{Flow, Lane, Phase, SessionState, MAX_ADVERSARIAL_ROUNDS};
 use self::supervisor::{LaneError, LaneSupervisor};
 
 pub const EVENT_NAME: &str = "orch://event";
+
+/// FIX-C — monotonic suffix for session ids (see `new_session_id`).
+static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Upper bound on how long the driver waits for `orch_ack` before falling
+/// through and emitting `session_start`. A frontend that crashed mid-handshake
+/// would otherwise leak a parked driver task. 5 s is generous — the ack is a
+/// single round-trip across a local IPC channel.
+const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ─── event envelope (UI-compatible with dryrun://event) ────────────────────
 
@@ -116,6 +125,10 @@ struct SessionHandle {
     cmd_tx: mpsc::Sender<SessionCommand>,
     /// Latest published state (best-effort snapshot for `get_state`).
     state: Arc<Mutex<SessionState>>,
+    /// FIX-C — gates the driver's first emit until the frontend has
+    /// inserted the session shell into its store. `orch_ack` consumes
+    /// this sender; on second ack the option is `None` (idempotent).
+    ack_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 #[derive(Default)]
@@ -128,16 +141,58 @@ impl OrchestrationCoordinator {
         Self::default()
     }
 
+    /// FIX-C — ms+monotonic counter. Two `orch_start` calls inside the same
+    /// millisecond used to produce identical sids and the second silently
+    /// overwrote the first SessionHandle in the coordinator map. The atomic
+    /// counter eliminates the collision; the ms prefix is kept so existing
+    /// log/journal greps that key on a leading timestamp still work.
     fn new_session_id() -> String {
         let ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        format!("orch-{ms}")
+        let n = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("orch-{ms}-{n}")
+    }
+
+    /// Public test hook for `tests/session_ordering_test.rs`. Not used in
+    /// production paths.
+    #[doc(hidden)]
+    pub fn new_session_id_for_test() -> String {
+        Self::new_session_id()
     }
 
     async fn register(&self, sid: &str, h: SessionHandle) {
         self.sessions.lock().await.insert(sid.to_string(), h);
+    }
+
+    /// Test helper — register a placeholder handle wired only with the ack
+    /// channel. Returns the receiver so a test can verify ack delivery.
+    #[doc(hidden)]
+    pub async fn register_with_ack(&self, sid: &str) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<SessionCommand>(1);
+        let h = SessionHandle {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            active: Arc::new(Mutex::new(None)),
+            cmd_tx,
+            state: Arc::new(Mutex::new(SessionState::Idle)),
+            ack_tx: Mutex::new(Some(tx)),
+        };
+        self.register(sid, h).await;
+        rx
+    }
+
+    /// FIX-C — release the driver's first emit. Idempotent: returns true
+    /// only on the first call per session.
+    pub async fn ack(&self, sid: &str) -> bool {
+        let map = self.sessions.lock().await;
+        let Some(h) = map.get(sid) else { return false };
+        let mut slot = h.ack_tx.lock().await;
+        match slot.take() {
+            Some(tx) => tx.send(()).is_ok(),
+            None => false,
+        }
     }
 
     async fn unregister(&self, sid: &str) {
@@ -236,7 +291,17 @@ async fn drive_session(
     start: OrchestrationStart,
     deps: Arc<OrchestrationDeps>,
     mut cmd_rx: mpsc::Receiver<SessionCommand>,
+    ack_rx: oneshot::Receiver<()>,
 ) {
+    // FIX-C — wait for the frontend to confirm it has the session in its
+    // store before emitting `session_start`. Without this gate the driver
+    // can race ahead of the `orch_start` invoke return and the first event
+    // arrives at a listener whose store has no entry yet (depending on the
+    // store's race tolerance, the event was dropped or applied to a stale
+    // active slot). On timeout we proceed anyway — the listener path still
+    // self-heals via `ensureSession`-on-event.
+    let _ = tokio::time::timeout(ACK_TIMEOUT, ack_rx).await;
+
     emit(
         &ctx.app,
         &ctx.sid,
@@ -1041,6 +1106,7 @@ pub async fn orch_start(
     let active = Arc::new(Mutex::new(None));
     let state = Arc::new(Mutex::new(SessionState::Idle));
     let (tx, rx) = mpsc::channel::<SessionCommand>(32);
+    let (ack_tx, ack_rx) = oneshot::channel::<()>();
 
     coord
         .register(
@@ -1050,6 +1116,7 @@ pub async fn orch_start(
                 active: active.clone(),
                 cmd_tx: tx,
                 state: state.clone(),
+                ack_tx: Mutex::new(Some(ack_tx)),
             },
         )
         .await;
@@ -1069,7 +1136,7 @@ pub async fn orch_start(
     // tear down the runtime — failures bubble up as a lane error and we emit
     // an `orch://event session_error` instead.
     let driver_sup: LaneSupervisor<()> = LaneSupervisor::spawn(async move {
-        drive_session(ctx, start, deps, rx).await;
+        drive_session(ctx, start, deps, rx, ack_rx).await;
     });
 
     tokio::spawn(async move {
@@ -1091,6 +1158,18 @@ pub async fn orch_start(
     });
 
     Ok(sid)
+}
+
+/// FIX-C — frontend acknowledges that the session shell is in the store.
+/// Until this fires the driver task is parked before its first emit, which
+/// guarantees `session_start` (and every subsequent event) lands on a
+/// session the frontend already has.
+#[tauri::command]
+pub async fn orch_ack(
+    coord: State<'_, OrchestrationCoordinator>,
+    session_id: String,
+) -> Result<bool, String> {
+    Ok(coord.ack(&session_id).await)
 }
 
 #[tauri::command]
