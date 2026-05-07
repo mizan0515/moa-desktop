@@ -49,6 +49,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             orchestrator::dryrun::dryrun_start,
+            orchestrator::dryrun::dryrun_ack,
             orchestrator::dryrun::dryrun_cancel,
             orchestrator::orch_start,
             orchestrator::orch_ack,

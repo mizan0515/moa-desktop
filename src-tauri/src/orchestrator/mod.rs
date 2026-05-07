@@ -265,6 +265,11 @@ struct DriverCtx {
     cancelled: Arc<AtomicBool>,
     active: Arc<Mutex<Option<ProcessControl>>>,
     state: Arc<Mutex<SessionState>>,
+    /// FIX-C — set true once the frontend has acked. Read by the cleanup
+    /// task to decide whether a panic-path `session_error` should fire:
+    /// if the frontend never acked, it has no record of this sid and
+    /// surfacing an error would phantom a failed session into the store.
+    acked: Arc<AtomicBool>,
 }
 
 impl DriverCtx {
@@ -294,13 +299,16 @@ async fn drive_session(
     ack_rx: oneshot::Receiver<()>,
 ) {
     // FIX-C — wait for the frontend to confirm it has the session in its
-    // store before emitting `session_start`. Without this gate the driver
-    // can race ahead of the `orch_start` invoke return and the first event
-    // arrives at a listener whose store has no entry yet (depending on the
-    // store's race tolerance, the event was dropped or applied to a stale
-    // active slot). On timeout we proceed anyway — the listener path still
-    // self-heals via `ensureSession`-on-event.
-    let _ = tokio::time::timeout(ACK_TIMEOUT, ack_rx).await;
+    // store before emitting anything. The driver MUST NOT emit before the
+    // ack: a `session_start` (or `session_error` on panic) leaking out
+    // would land on a listener whose store has no entry, which is the
+    // exact race we are fixing. On timeout / sender-dropped we exit
+    // silently — the frontend never knew this sid existed, so there is
+    // nothing to surface; the cleanup task will unregister.
+    match tokio::time::timeout(ACK_TIMEOUT, ack_rx).await {
+        Ok(Ok(())) => ctx.acked.store(true, Ordering::SeqCst),
+        _ => return,
+    }
 
     emit(
         &ctx.app,
@@ -1121,16 +1129,19 @@ pub async fn orch_start(
         )
         .await;
 
+    let acked = Arc::new(AtomicBool::new(false));
     let ctx = DriverCtx {
         app: app.clone(),
         sid: sid.clone(),
         cancelled,
         active,
         state,
+        acked: acked.clone(),
     };
     let deps = deps.inner().clone();
     let sid_for_cleanup = sid.clone();
     let app_for_cleanup = app.clone();
+    let acked_for_cleanup = acked;
 
     // Wrap the driver in a LaneSupervisor so a panic in the driver does not
     // tear down the runtime — failures bubble up as a lane error and we emit
@@ -1142,15 +1153,20 @@ pub async fn orch_start(
     tokio::spawn(async move {
         let outcome = driver_sup.into_outcome().await;
         if let Err(e) = outcome {
-            // Driver panicked — emit a structured error so UI can surface it.
-            let env = EventEnvelope {
-                session_id: &sid_for_cleanup,
-                phase: Phase::Final.as_str(),
-                lane: Some(Lane::System.as_str()),
-                kind: "session_error",
-                payload: Some(serde_json::json!({ "message": format!("driver panic: {e}") })),
-            };
-            let _ = app_for_cleanup.emit(EVENT_NAME, env);
+            // Driver panicked — emit a structured error so UI can surface
+            // it, but only if the frontend has acked. Without an ack the
+            // listener has no record of this sid and a `session_error`
+            // would phantom a failed entry into the store (FIX-C).
+            if acked_for_cleanup.load(Ordering::SeqCst) {
+                let env = EventEnvelope {
+                    session_id: &sid_for_cleanup,
+                    phase: Phase::Final.as_str(),
+                    lane: Some(Lane::System.as_str()),
+                    kind: "session_error",
+                    payload: Some(serde_json::json!({ "message": format!("driver panic: {e}") })),
+                };
+                let _ = app_for_cleanup.emit(EVENT_NAME, env);
+            }
         }
         if let Some(coord) = app_for_cleanup.try_state::<OrchestrationCoordinator>() {
             coord.unregister(&sid_for_cleanup).await;
