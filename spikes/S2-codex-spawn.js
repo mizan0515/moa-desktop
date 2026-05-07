@@ -147,10 +147,14 @@ function runCodex({ sandbox, cwd, prompt, timeoutMs = 60000 }) {
   if (r2.stderr.trim()) console.log(`[S2/workspace-write] stderr (truncated):`, r2.stderr.slice(0, 600));
 
   // ---- Verdict ----
+  const sandboxBlocked = !roFileExists;
+  const writeAllowed = wwFileExists;
+  const streaming = r1.eventCount > 0 && r2.eventCount > 0;
+
   console.log(`\n[S2] ===== RESULT =====`);
-  console.log(`[S2] read-only blocked mutation: ${!roFileExists ? "PASS" : "FAIL"}`);
-  console.log(`[S2] workspace-write allowed mutation: ${wwFileExists ? "PASS" : "FAIL"}`);
-  console.log(`[S2] JSONL streaming working: ${r1.eventCount > 0 && r2.eventCount > 0 ? "PASS" : "FAIL"}`);
+  console.log(`[S2] read-only blocked mutation: ${sandboxBlocked ? "PASS" : "FAIL"}`);
+  console.log(`[S2] workspace-write allowed mutation: ${writeAllowed ? "PASS" : "FAIL"}`);
+  console.log(`[S2] JSONL streaming working: ${streaming ? "PASS" : "FAIL"}`);
 
   // dump first 5 event types for each run
   const types = (evs) => evs.slice(0, 8).map(e => e.type || e.msg?.type || e._raw?.slice(0, 40) || "?").join(", ");
@@ -162,5 +166,12 @@ function runCodex({ sandbox, cwd, prompt, timeoutMs = 60000 }) {
   fs.writeFileSync(dumpPath, JSON.stringify({ ro: r1.events, ww: r2.events }, null, 2));
   console.log(`[S2] raw events dumped to ${dumpPath}`);
 
+  // Sandbox verification is the primary safety assertion — exit non-zero on any FAIL
+  // so CI / manual runs surface regressions instead of being masked by exit 0.
+  const ok = sandboxBlocked && writeAllowed && streaming;
+  if (!ok) {
+    console.error(`[S2] FAIL — sandboxBlocked=${sandboxBlocked} writeAllowed=${writeAllowed} streaming=${streaming}`);
+    process.exit(1);
+  }
   process.exit(0);
 })();

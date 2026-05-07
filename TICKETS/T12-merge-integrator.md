@@ -64,6 +64,7 @@ T11 의 N lane 이 모두 완료된 후:
 
 ## NEVER 영역
 - src-tauri/src/{decomposer,parallel}/ body (T10/T11)
+- src-tauri/src/{policy,safety,commands,lifecycle}/ body (T13 owns)
 - src-tauri/src/{adapters,orchestrator,safety,git,lock,journal,synthesis,process,telemetry}/ body
 - main repo 직접 force overwrite (T4 patch apply API 만 사용)
 - 미커밋 user 변경을 묻지 않고 force remove
