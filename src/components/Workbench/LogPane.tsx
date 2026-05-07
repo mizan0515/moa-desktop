@@ -1,6 +1,7 @@
 // T1 placeholder, wired by T7-thin to stream live dry-run events.
 import { useSyncExternalStore } from "react";
 import { dryRunStore } from "../../lib/orchestrator/dryRun";
+import { redact } from "../../lib/redact";
 
 export default function LogPane() {
   useSyncExternalStore(dryRunStore.subscribe, dryRunStore.getSnapshot);
@@ -20,7 +21,7 @@ export default function LogPane() {
         <div key={i} className="log-row">
           <span className="log-ts">{l.ts}</span>
           <span className={`log-lane ${l.lane}`}>{l.lane}</span>
-          <span className="log-msg">{l.msg}</span>
+          <span className="log-msg">{redact(l.msg)}</span>
         </div>
       ))}
     </div>

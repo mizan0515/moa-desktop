@@ -18,19 +18,17 @@ export default function ClaimLedger({ entries = [] }: ClaimLedgerProps) {
         <ol className="claim-list">
           {visible.map((c, i) => (
             <li key={i} className="claim-row">
-              <div className="claim-text">{c.claim}</div>
-              <div className="claim-meta">
-                <span className="claim-evidence" title="evidence">
-                  {c.evidence || "—"}
+              <span className="claim-text">{c.claim}</span>
+              <span className="claim-evidence" title="evidence">
+                {c.evidence || "—"}
+              </span>
+              <span className={`claim-level lvl-${c.level}`}>{c.level}</span>
+              <span className={`claim-conf conf-${c.confidence}`}>{c.confidence}</span>
+              {c.residualRisk ? (
+                <span className="claim-risk" title="residual risk">
+                  risk: {c.residualRisk}
                 </span>
-                <span className={`claim-level lvl-${c.level}`}>{c.level}</span>
-                <span className={`claim-conf conf-${c.confidence}`}>{c.confidence}</span>
-                {c.residualRisk ? (
-                  <span className="claim-risk" title="residual risk">
-                    risk: {c.residualRisk}
-                  </span>
-                ) : null}
-              </div>
+              ) : null}
             </li>
           ))}
         </ol>
