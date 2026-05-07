@@ -13,6 +13,13 @@ export interface Citation {
   excerpt?: string;
 }
 
+export interface ClaimAttempt {
+  text: string;
+  confidence: Confidence;
+  citations: Citation[];
+  attempt?: number;
+}
+
 export interface WorkerClaim {
   id: string;
   text: string;
@@ -23,6 +30,13 @@ export interface WorkerClaim {
   topic?: string;
   /** Per-claim attempt counter. Higher attempt # appends evidence rather than overwriting. */
   attempt?: number;
+  /**
+   * Full retry history. `appendAttempt` pushes a snapshot of each attempt here
+   * (in chronological order) so that prior text/confidence/citations are
+   * preserved even when a later attempt with higher confidence replaces the
+   * top-level fields.
+   */
+  attempts?: ClaimAttempt[];
 }
 
 export interface WorkerOpenQuestion {
