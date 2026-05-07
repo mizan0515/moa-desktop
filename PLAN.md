@@ -8,7 +8,7 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 ### F1. `codex exec` 명령 템플릿 — 확정 (2026-05-06 사용자 검증 완료, codex-cli 0.128.0)
 - ❌ **불가**: `codex exec --reasoning-effort high ...` — `error: unexpected argument '--reasoning-effort' found`
 - ✅ **확정 (read-only first-pass)**: `codex exec --ephemeral -c model_reasoning_effort='high' --sandbox read-only --cd <repo> <prompt>`
-- ✅ **확정 (mutation owner)**: `codex exec --ephemeral -c model_reasoning_effort='high' --sandbox workspace-write --cd <worktree> <prompt>`
+- ✅ **확정 (mutation owner, Windows S2 #5)**: `codex exec --ephemeral -c model_reasoning_effort='high' --dangerously-bypass-approvals-and-sandbox --cd <worktree> <prompt>` (isolated worktree 안. `--sandbox workspace-write` 는 Windows 에서 broken — `src-tauri/src/adapters/codex.rs::mutation_argv` 가 source of truth)
 - ✅ JSON streaming: `--json` 추가 (라인 단위 emit)
 - ✅ Web search 사용: config.toml 에서 `[tools.web_search] enabled = true` 또는 `-c tools.web_search=true`
 - 비차단 경고 (T0 에서 기록만, 차단 X): `chatgpt.com` 플러그인/analytics 403, PowerShell shell snapshot 미지원, MCP client `program not found`
@@ -72,7 +72,7 @@ Status: Ready for ticket dispatch after critical-fix confirmation
    - risk 충돌 → cheapest decisive test 실행 — 자동
    - **아키텍처 tradeoff → 사용자 escalation (이때만 멈춤)**
 6. **mutation owner 자동 선택** (mechanical/Windows shell → Codex, semantic refactor → Claude default. orchestrator heuristic + 사용자 override 가능)
-7. T4 lock acquire → git worktree 생성 → mutation Worker 실행 (Claude `Edit/Write` 또는 Codex `--sandbox workspace-write`) → patch 추출
+7. T4 lock acquire → git worktree 생성 → mutation Worker 실행 (Claude `Edit/Write` 또는 Codex `--dangerously-bypass-approvals-and-sandbox` inside isolated worktree, Windows S2 #5) → patch 추출
 8. **Same-file 순차 편집 자동 처리**:
    - 첫 Worker 종료 → file hash snapshot (T4)
    - second Worker 가 review-only 모드로 최신 파일 re-read
@@ -99,7 +99,7 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 
 ### "양측 모두 web search · deep thinking · file edit" 보장
 - Claude Worker: read-only 모드 — `--allowedTools "Read" "WebSearch" "WebFetch" "Bash(git:*)" "Bash(rg:*)"`. Mutation 모드 — `+ "Edit" "Write"`. Deep thinking — prompt 에 "think hard" 또는 `MAX_THINKING_TOKENS=10000` env.
-- Codex Worker: read-only — `--sandbox read-only -c model_reasoning_effort='high' -c tools.web_search=true`. Mutation — `--sandbox workspace-write` 동일 reasoning + web_search.
+- Codex Worker: read-only — `--sandbox read-only -c model_reasoning_effort='high' -c tools.web_search=true`. Mutation — `--dangerously-bypass-approvals-and-sandbox` (isolated worktree 안, Windows S2 #5) + 동일 reasoning + web_search.
 
 ## 0.6 v1.5 Prequel — Policy & Lifecycle EPIC (T13, 2026-05-07 사용자 비전 검증 결과)
 
