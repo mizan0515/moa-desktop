@@ -142,7 +142,7 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true
   "mutationPolicy": "single-owner-with-transfer",
   "sameFileSequentialEdit": true,
   "claude": {"enabled": true, "command": "claude", "model": "opus", "maxTurns": 20, "allowWeb": true, "allowEditWhenOwner": true},
-  "codex": {"enabled": true, "commandTemplate": "codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true --sandbox {{sandboxMode}} --json --cd {{cwd}} {{prompt}}", "allowWeb": true, "allowEditWhenOwner": true},
+  "codex": {"enabled": true, "commandTemplate": "codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true --sandbox {{sandboxMode}} --json --cd {{cwd}} {{prompt}}", "_commandTemplateNote": "read-only first-pass 전용 template ({{sandboxMode}}=read-only). Mutation 은 별도 빌더 (`src-tauri/src/adapters/codex.rs::mutation_argv`) — `--sandbox` 제거 + `--dangerously-bypass-approvals-and-sandbox` 추가, isolated worktree 안 (Windows S2 #5).", "allowWeb": true, "allowEditWhenOwner": true},
   "safety": {"blockPeerRecursion": true, "blockSecrets": true, "requireGitCheckpoint": true, "stopOnTestFailure": true}
 }
 ```
