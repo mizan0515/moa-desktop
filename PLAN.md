@@ -122,6 +122,28 @@ EPIC 구조 (단일 ticket T13, 5 phase):
 
 T10/T11/T12 는 본 EPIC 통과 후 Phase 6 원안대로 진행. 단 T10/T11/T12 본문에는 "PR 생성 전/머지 전/통합 전/main 적용 전 Codex adversarial review gate 의무" 를 **lead/orchestrator-owned gate** 로 명시한다. 앱 실행 시에는 orchestrator source, Codex Desktop 수동 개발 시에는 lead PowerShell 별도 review 로 수행할 수 있다. worker prompt 는 review gate 통과 전 PR 생성/merge/main apply 금지만 안내하고, 워커가 peer AI 를 직접 호출하는 문구는 포함하지 않는다.
 
+## 0.7 v1.6 Prequel — Pi Runtime EPIC (T15, 2026-05-08 사용자 비전 반영)
+
+Pi 는 "Pi-inspired layer" 가 아니라 MoA Desktop 안에 들어오는 parent-owned third harness runtime 이다. Claude/Codex worker 내부 tool 이 아니며, worker nested peer-call 금지와 mandatory `CodexAdversarialXHigh` review gate 는 그대로 유지한다.
+
+확인 근거(2026-05-08):
+- `@earendil-works/pi-coding-agent` npm latest = `0.74.0`.
+- `@mariozechner/pi-coding-agent` 는 deprecated 이며 `@earendil-works/pi-coding-agent` 사용을 안내한다.
+- `earendil-works/pi` HEAD = `783e96a14431e9cb33299d8c5e162cc5ad6e7c69`.
+- Pi RPC docs 는 `pi --mode rpc` 의 stdin/stdout JSONL headless protocol 을 제공한다.
+- Pi SDK docs 는 `createAgentSession`, `DefaultResourceLoader`, `createEventBus`, `ModelRegistry`, `SessionManager` 를 제공한다.
+- Pi packages docs 는 packages/extensions 의 full system access 위험을 명시한다.
+
+핵심 결정:
+- **T15a/T15b**: RPC MVP 먼저. `PiRpcAdapter` 는 `pi --mode rpc --no-session` 를 strict JSONL 로 붙인다.
+- **T15c**: SDK sidecar 확장. `moa-pi-host` Node sidecar 에서 `@earendil-works/pi-coding-agent` SDK 를 직접 구동한다.
+- **T15d/e/f/g**: package trust, extension UI, model/session tree, MoA native Pi extensions 를 T13 policy 아래에 넣는다.
+- **초기 권한**: Pi lane 은 read-only/research/reviewer/conversational only. mutation owner 승격은 T15g 이후 별도 opt-in.
+- **Hot reload**: mutation lock 보유 중 금지, package manifest/hash 재검증 후 다음 turn/lane 부터 적용.
+- **Review gate**: Pi review 는 보조 신호일 뿐 mandatory `CodexAdversarialXHigh` 를 대체하지 않는다.
+
+상세: [TICKETS/T15-pi-runtime-epic.md](TICKETS/T15-pi-runtime-epic.md).
+
 ## 1. Implementation phases (value-incremental, 5-7주 1인)
 
 ### Phase 0 — Spike (T0, 5-7일)
@@ -163,24 +185,36 @@ F5 의 S1-S8 검증. 통과 못하면 Phase 1 진입 금지.
 - UI wireframe 사용자 confirm
 - README, dry-run 데모 영상 또는 GIF
 
-### Phase 6 (v1.5) — Multi-ticket / Multi-project (T10, T11, T12 → 1.5-2주)
+### Phase 6 (v1.5/v1.6 bridge) — Pi-aware Multi-ticket / Multi-project (T15a/T15b → T10/T11/T12 → 2-3주)
 **비전 충족 단계**: 글로벌 `/병행티켓` + `/병행통합` 등가 + Codex/Claude Desktop 동등 multi-project.
+- T15a: Pi Compatibility Spike — Windows/Tauri/MoA 환경에서 Pi CLI/RPC/SDK/package/hot reload 검증. production code 없음.
+- T15b: Pi RPC Runtime Adapter — `pi --mode rpc` 를 `PiRpcAdapter` 로 붙여 `runtimeKind="pi"` read-only/research/reviewer lane MVP 를 만든다.
 - T10: Ticket Decomposer — 큰 작업 입력 → 양측 MoA first-pass 로 충돌 없는 N 티켓 + paste-ready prompt + 의존성 그래프 + 머지 순서 emit. UI 에 "Decompose" 버튼 + TicketBoard 컴포넌트.
+- T10 amend: output schema 는 `runtimeKind`, `allowedHarnesses`, `piExtensionPolicyRef` 를 포함한다.
 - T11: Parallel Session Runner — 티켓 N 개 → worktree pool N → 각 lane 이 독립 T7-full orchestrator instance. UI 에 ParallelLanes (N 개 lane 동시 표시). 사용자가 각 lane "Run" 클릭 (자동 실행 X — 자원 폭주 방지).
+  - T11 amend: Pi lane 도 queue/resource budget 대상으로 다루되 initial permission 은 read-only/research/reviewer only.
   - **Resource budget** (필수): global `max_live_workers` (default 4), per-project `max_lanes` (default 2), bounded ring buffer for worker output (default 1MB) + disk spill, hidden tab idle throttling, RSS watchdog. tab close 가 React state + Rust `ProjectHandle/SessionHandle` drop + process abort + journal handle close + lock release 모두 수행 (drop test 필수).
   - **Lock ordering 준수**: § F6 의 contract 따름. cross-project 작업 시 `try_acquire_all` 2-phase, 실패 시 전부 release.
 - T12: Merge Integrator — 모든 lane 완료 후 머지 순서대로 patch apply → 충돌 시 stop + 한국어 보고. 성공 시 worktree 정리.
+- T12 amend: Pi lane result 도 `ReviewRunRecord`, patch metadata, omitted files, limitations 를 동일하게 검증한다.
 - **Multi-project 활성화**: T1 의 single-instance + tab 인프라 + T4 의 OS-level mutex 인프라가 이미 깔려 있다는 가정 하에 본 phase 에서 lock manager 를 repo-path scoped 로 확장. per-project journal/telemetry 격리는 T1/T4/T9 가 Phase 1/3/4 시점부터 project-id 를 키로 받도록 미리 설계 (Phase 6 backtrack 방지).
 
 **Phase 6 진입 전 체크**: T1 가 상단 프로젝트 탭 바 + tabRegistry 패턴을 포함했는가, T4 lock 이 project-id 키로 분리됐는가, T9 telemetry 가 project-scoped 인가. 셋 중 하나라도 누락이면 backtrack 비용 큼 — **T1/T4/T9 ticket 본문을 본 결정에 맞춰 amend 필요** (다음 단계).
 
-### Phase 7 (v1.6) — Conversational Mode (T14, pending)
+### Phase 7 (v1.6) — Pi SDK / Conversational Mode (T15c-T15g, T14, T16)
 **비전 확장 단계**: 자동화 mode 외에 Claude Code Desktop + Codex MCP 처럼 사용자가 conversational peer workflow 를 직접 운전하는 mode.
+- T15c: Pi SDK Sidecar Host — `moa-pi-host` Node sidecar 에서 SDK 직접 구동.
+- T15d: Pi Package Trust & Installer — pinned version, sha256, source review, capability manifest, autoUpdate=false.
+- T15e: Pi Extension UI Bridge — `ctx.ui` / extension UI requests 를 React/Tauri UI 로 매핑.
+- T15f: Pi Model Switch & Session Tree — Pi model/thinking/fork/clone/compact 를 MoA UI 에 노출하되 ResumePacket 이 source of truth.
+- T15g: MoA Native Pi Extensions — tool guard, review gate, ticket context, lane telemetry. 이후에만 Pi mutation owner opt-in 검토.
 - T14: `settings.interactionMode = "automated" | "conversational"`.
 - peer dispatch 는 UI/orchestrator-mediated 만 허용. worker 가 peer AI 를 직접 호출하는 nested peer-call 은 금지.
+- Pi interactive lane 도 conversational 후보에 포함한다. Pi session tree 는 MoA journal/ResumePacket 을 대체하지 않고 mirror 된다.
 - thinking/reasoning summary 를 `thinking_chunk` 이벤트로 분리해 expand/collapse 표시.
 - 현재 adapter 가 stdin 을 닫는 one-shot 모델이면 same-stream redirect/`<ASK_USER>` 답변 주입을 주장하지 않는다. 우선 spawn-new-turn + ResumePacket state carryover 로 conversational turn 을 구현하고, interactive/resumable adapter 가 생긴 뒤 same-stream redirect 를 확장한다.
 - 상세: [TICKETS/T14-conversational-mode.md](TICKETS/T14-conversational-mode.md), GitHub #29.
+- T16: Harness Marketplace / Equipment Profiles — workflow 는 유지하고 runtime/model/toolset/extension pack/safety level 만 profile 로 바꾼다.
 
 ## 2. Ticket dependency graph (value-incremental)
 
@@ -208,13 +242,23 @@ T0 (spike) ── 통과 후 Phase 1 진입
                                 │     │
                                 │     └─ T13 (Policy & Lifecycle EPIC)
                                 │            │
-                                │            └─ T10 (Ticket Decomposer)
+                                │            └─ T15a (Pi Compatibility Spike)
                                 │                  │
-                                │                  └─ T11 (Parallel Runner)
+                                │                  └─ T15b (Pi RPC Runtime Adapter)
                                 │                        │
-                                │                        └─ T12 (Merge Integrator)
+                                │                        └─ T10 (Ticket Decomposer, pi-aware)
+                                │                              │
+                                │                              └─ T11 (Parallel Runner, pi lane budget)
+                                │                                    │
+                                │                                    └─ T12 (Merge Integrator, pi result records)
                                 │
-                                └─ T14 (Conversational Mode, after T13; same-stream features only after interactive adapter)
+                                └─ T15c (Pi SDK Sidecar Host)
+                                      ├─ T15d (Package Trust)
+                                      ├─ T15e (Extension UI Bridge)
+                                      ├─ T15f (Model Switch & Session Tree)
+                                      └─ T15g (MoA Native Pi Extensions)
+                                            ├─ T14 (Conversational Mode with Pi)
+                                            └─ T16 (Harness Marketplace / Equipment Profiles)
 ```
 
 ## 3. Final ticket list (paste-ready 다음 섹션에서 prompt 화)
@@ -235,14 +279,23 @@ T0 (spike) ── 통과 후 Phase 1 진입
 | T9 | 4 | `src-tauri/src/telemetry/*`, `src/components/CostMeter.tsx`, `src-tauri/src/cancel/*` | T2 | T2 |
 | **T20-GATE** | 5.5 | AppHandle 통합 테스트 보강 (#20) | orchestrator/Tauri test harness | T7-full |
 | **T13** | 5.5 | `src-tauri/src/{policy,safety,commands,lifecycle}/*`, settings/policy UI hooks | 글로벌 15 파일 + settings safe subset, T7-full | T20-GATE, T7-full |
-| **T10** | 6 | `src-tauri/src/decomposer/*`, `prompts/decomposer.txt`, `src/components/TicketBoard.tsx` | T7-full, T5a, T5b, T13 review/policy schema | T13 |
-| **T11** | 6 | `src-tauri/src/parallel/*`, `src-tauri/src/parallel/worktree_pool.rs`, `src/components/ParallelLanes.tsx` | T4 (worktree.rs API), T7-full, T9, T10 schema | T4, T7-full, T9, T10 |
-| **T12** | 6 | `src-tauri/src/integrator/*`, `src/components/IntegratePanel.tsx` | T4 (patch apply), T10 merge order, T11 lane results, T13 review gate | T11 |
-| **T14** | 7 | `src-tauri/src/conversation/*`, `src/components/ConversationPanel.tsx`, `src/components/ThinkingBlock.tsx` | T13 commands/lifecycle/scanner, adapters | T13 |
+| **T15** | 6/7 | `DESIGN.md`, `PLAN.md`, `TICKETS/T15*.md`, Pi runtime architecture | T13 policy/review/lifecycle | T13 |
+| **T15a** | 6 | `spikes/T15a-pi-*` | Pi docs/npm metadata, T13 policy vocabulary | T13 |
+| **T15b** | 6 | `src-tauri/src/adapters/pi_rpc.rs`, `src-tauri/src/pi/rpc.rs`, `src-tauri/tests/pi_rpc_*.rs` | T2 ProcessRunner, T13 safety/review | T15a |
+| **T10** | 6 | `src-tauri/src/decomposer/*`, `prompts/decomposer.txt`, `src/components/TicketBoard.tsx` | T7-full, T5a, T5b, T13 review/policy schema, T15b runtimeKind=pi | T13, T15b |
+| **T11** | 6 | `src-tauri/src/parallel/*`, `src-tauri/src/parallel/worktree_pool.rs`, `src/components/ParallelLanes.tsx` | T4 (worktree.rs API), T7-full, T9, T10 schema, T15b Pi lane | T4, T7-full, T9, T10 |
+| **T12** | 6 | `src-tauri/src/integrator/*`, `src/components/IntegratePanel.tsx` | T4 (patch apply), T10 merge order, T11 lane results, T13 review gate, Pi lane result records | T11 |
+| **T15c** | 7 | `sidecars/moa-pi-host/*`, `src-tauri/src/pi/sidecar.rs`, `docs/pi-sidecar-packaging.md` | T15b, T13 policy | T15b |
+| **T15d** | 7 | `src-tauri/src/pi/package_*.rs`, `src/components/PiPackageManager.tsx` | T15c, T13 policy/safety | T15c |
+| **T15e** | 7 | `src-tauri/src/pi/extension_ui.rs`, `src/components/PiExtension*.tsx` | T15c, T15d capability manifest | T15c, T15d |
+| **T15f** | 7 | `src-tauri/src/pi/session_tree.rs`, `src/components/PiSessionTree.tsx`, `src/components/PiModelSwitcher.tsx` | T15c, T13 ResumePacket | T15c |
+| **T15g** | 7 | `sidecars/moa-pi-host/extensions/moa-*/*` | T15d/e/f, T13 review/safety | T15d, T15e, T15f |
+| **T14** | 7 | `src-tauri/src/conversation/*`, `src/components/ConversationPanel.tsx`, `src/components/ThinkingBlock.tsx` | T13 commands/lifecycle/scanner, adapters, T15f Pi session tree | T13, T15b or T15c |
+| **T16** | 7 | `src-tauri/src/harness_profiles/*`, `src/components/HarnessMarketplace.tsx`, `src/components/EquipmentProfilePicker.tsx` | T13 settings/policy, T15 package/session APIs | T15g |
 
 **병렬 가능한 첫 스프린트** (T0 통과 후): T1, T8, T2 (3 worker 동시 가능). T6, T7-thin 는 T8 schema 합의 후.
 
-**Phase 6 ticket 들 사이 병렬 가능성**: T10 단독 → T11 단독 → T12 (T11 의존). T11/T12 는 직렬.
+**Phase 6 ticket 들 사이 병렬 가능성**: T15a/T15b 를 T10 전에 두는 것이 기본. 이후 T10 단독 → T11 단독 → T12 (T11 의존). T15c 이후 T15d/T15e/T15f 는 병렬 가능하되 T15d package trust 와 T13 policy/safety 충돌을 피한다. T15g/T16 은 뒤에 둔다.
 
 ## 4. T1/T4/T9 amend 필요 사항 (Phase 6 backtrack 방지)
 v1 ticket 본문에 multi-project 인프라 hook 미리 박아둔다:
