@@ -443,22 +443,34 @@
 }
 
 .claim-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
   font-size: 12px;
   color: var(--fg-1);
 }
 
 .claim-text {
+  flex: 1 1 200px;
+  min-width: 0;
   color: var(--fg-0);
   line-height: 1.35;
   word-break: break-word;
 }
 
-.claim-meta {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: baseline;
-  margin-top: 2px;
+.claim-level,
+.claim-conf {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+
+.claim-evidence,
+.claim-risk {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 11px;
   color: var(--fg-2);
 }

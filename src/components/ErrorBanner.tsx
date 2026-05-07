@@ -5,6 +5,7 @@
 // unconditionally in `Results`.
 import { adviceForErrorKind } from "../lib/telemetry";
 import type { ProcessErrorKind } from "../lib/processEvents";
+import { redact } from "../lib/redact";
 
 export interface ErrorBannerProps {
   kind?: ProcessErrorKind | null;
@@ -45,7 +46,7 @@ export default function ErrorBanner({ kind, detail, onDismiss }: ErrorBannerProp
       {detail && (
         <details className="error-banner-raw">
           <summary>Raw output</summary>
-          <pre>{detail}</pre>
+          <pre>{redact(detail)}</pre>
         </details>
       )}
     </div>
