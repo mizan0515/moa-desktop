@@ -499,7 +499,20 @@ async fn drive_session(
                     Some(serde_json::json!({ "skipped": true })),
                 );
             }
-            Err(e) => return finalize_failed(&ctx, e).await,
+            Err(e) => {
+                // FIX-F (Codex BLOCKER 2) — distinguish user-cancel from
+                // genuine failure. Pre-fix: cancelled mutation routed to
+                // `finalize_failed` which emits `session_error`, so the
+                // frontend rendered a hard error for what the user just
+                // asked for. Now: cancel routes to `finalize_cancelled`
+                // (`session_cancelled`) and journals SessionEnd so the
+                // durability invariant ("a terminal entry is always
+                // written") is met on every exit branch.
+                if ctx.is_cancelled() || e == "cancelled" {
+                    return finalize_cancelled(&ctx).await;
+                }
+                return finalize_failed(&ctx, e).await;
+            }
         }
     }
 
@@ -529,6 +542,11 @@ async fn drive_session(
 }
 
 async fn finalize_cancelled(ctx: &DriverCtx) {
+    // FIX-F (Codex BLOCKER 2) — terminal journal write so reconcile sees a
+    // SessionEnd marker on cancel paths, not just success.
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.note(JournalPhase::SessionEnd, "cancelled");
+    }
     ctx.set_state(SessionState::Cancelled).await;
     emit(
         &ctx.app,
@@ -541,6 +559,9 @@ async fn finalize_cancelled(ctx: &DriverCtx) {
 }
 
 async fn finalize_failed(ctx: &DriverCtx, msg: String) {
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.note(JournalPhase::SessionEnd, format!("failed: {msg}"));
+    }
     ctx.set_state(SessionState::Failed { message: msg.clone() })
         .await;
     emit(
@@ -1193,6 +1214,13 @@ async fn run_mutation_phase(
 
     if ctx.is_cancelled() {
         let _ = wt.remove();
+        // FIX-F (Codex BLOCKER 2) — journal the wt cleanup on cancel too,
+        // not only on success. Reconcile must be able to tell that a
+        // worktree directory left over on disk is genuinely abandoned vs.
+        // "we crashed before we got to remove it".
+        if let Some(j) = ctx.journal.as_ref() {
+            let _ = j.note(JournalPhase::WorktreeRemoved, "cancelled");
+        }
         return Err("cancelled".into());
     }
 
@@ -1227,6 +1255,9 @@ async fn run_mutation_phase(
 
     if patch.is_empty() {
         let _ = wt.remove();
+        if let Some(j) = ctx.journal.as_ref() {
+            let _ = j.note(JournalPhase::WorktreeRemoved, "empty-patch");
+        }
         emit(
             &ctx.app,
             &ctx.sid,
