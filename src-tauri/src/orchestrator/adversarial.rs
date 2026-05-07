@@ -87,6 +87,47 @@ pub enum Verdict {
     Unknown,
 }
 
+/// FIX-F — outcome of a single adversarial round, decoupled from the I/O
+/// loop so the gate can be unit-tested without spawning an adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdversarialDecision {
+    /// PASS — synthesis approved, mutation may proceed.
+    Approved,
+    /// BLOCKER — re-run adversarial round (still under `max_rounds`).
+    Retry { next_round: u32 },
+    /// BLOCKER persists at `max_rounds` — escalate to user, fail session.
+    EscalateBlocker { round: u32 },
+    /// NEED_CLARIFICATION or UNKNOWN — escalate to user, **mutation must
+    /// not run**. Pre-FIX-F the loop returned `Ok(())` for both branches,
+    /// which silently let an unverified synthesis through to the mutation
+    /// owner. The frontend got the `escalation` event but the Rust driver
+    /// kept walking.
+    EscalateNoMutation { reason: &'static str, round: u32 },
+}
+
+/// Pure decision: given the parsed `Verdict` plus the current round /
+/// ceiling, what does the orchestrator do next?
+pub fn decide(verdict: Verdict, round: u32, max_rounds: u32) -> AdversarialDecision {
+    match verdict {
+        Verdict::Pass => AdversarialDecision::Approved,
+        Verdict::Unknown => AdversarialDecision::EscalateNoMutation {
+            reason: "verdict-unknown",
+            round,
+        },
+        Verdict::NeedClarification => AdversarialDecision::EscalateNoMutation {
+            reason: "need-clarification",
+            round,
+        },
+        Verdict::Blocker => {
+            if round >= max_rounds {
+                AdversarialDecision::EscalateBlocker { round }
+            } else {
+                AdversarialDecision::Retry { next_round: round + 1 }
+            }
+        }
+    }
+}
+
 pub fn parse_verdict(reviewer_output: &str) -> Verdict {
     // Look for a line beginning with `## Verdict:` (case-insensitive ws).
     for line in reviewer_output.lines() {
@@ -153,5 +194,62 @@ mod tests {
     #[test]
     fn verdict_unknown_when_missing() {
         assert_eq!(parse_verdict("no verdict here"), Verdict::Unknown);
+    }
+
+    // ─── FIX-F: gate decision ─────────────────────────────────────────────
+
+    #[test]
+    fn decide_pass_approves() {
+        assert_eq!(decide(Verdict::Pass, 1, 3), AdversarialDecision::Approved);
+        assert_eq!(decide(Verdict::Pass, 3, 3), AdversarialDecision::Approved);
+    }
+
+    #[test]
+    fn decide_unknown_blocks_mutation() {
+        let d = decide(Verdict::Unknown, 1, 3);
+        assert_eq!(
+            d,
+            AdversarialDecision::EscalateNoMutation {
+                reason: "verdict-unknown",
+                round: 1
+            }
+        );
+    }
+
+    #[test]
+    fn decide_need_clarification_blocks_mutation() {
+        let d = decide(Verdict::NeedClarification, 2, 3);
+        assert_eq!(
+            d,
+            AdversarialDecision::EscalateNoMutation {
+                reason: "need-clarification",
+                round: 2
+            }
+        );
+    }
+
+    #[test]
+    fn decide_blocker_below_max_retries() {
+        assert_eq!(
+            decide(Verdict::Blocker, 1, 3),
+            AdversarialDecision::Retry { next_round: 2 }
+        );
+        assert_eq!(
+            decide(Verdict::Blocker, 2, 3),
+            AdversarialDecision::Retry { next_round: 3 }
+        );
+    }
+
+    #[test]
+    fn decide_blocker_at_max_escalates() {
+        assert_eq!(
+            decide(Verdict::Blocker, 3, 3),
+            AdversarialDecision::EscalateBlocker { round: 3 }
+        );
+        // Defensive: never retry past the ceiling even if input is malformed.
+        assert_eq!(
+            decide(Verdict::Blocker, 4, 3),
+            AdversarialDecision::EscalateBlocker { round: 4 }
+        );
     }
 }
