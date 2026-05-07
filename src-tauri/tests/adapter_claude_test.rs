@@ -347,3 +347,54 @@ async fn malformed_json_line_surfaces_event_then_continues() {
     assert!(events.iter().any(|e| matches!(e, ClaudeEvent::Result { .. })));
     assert!(matches!(events.last(), Some(ClaudeEvent::Exit { .. })));
 }
+
+#[tokio::test]
+async fn firstpass_spec_carries_env_inherit_allowlist() {
+    // Regression: pre-fix the runner blanked the child env (`env_clear()`
+    // + spec.env only), so Claude lost USERPROFILE / APPDATA / PATH /
+    // PATHEXT / SystemRoot. The adapter must now ship a non-empty
+    // `env_inherit` whitelist via `ProcessSpec::new`'s default.
+    let script = vec![r#"{"type":"system","subtype":"init","session_id":"sess-env"}"#];
+    let runner = Arc::new(ScriptRunner::new(script));
+    let adapter = ClaudeAdapter::new(runner.clone(), cfg());
+
+    let _ = adapter
+        .firstpass(FirstPassRequest {
+            task: "t".into(),
+            files: vec![],
+            cwd: PathBuf::from("."),
+        })
+        .await
+        .expect("spawn");
+
+    let cap = runner.captured();
+    let spec = cap.spec.expect("spec captured");
+    let inherited: std::collections::HashSet<&str> =
+        spec.env_inherit.iter().map(String::as_str).collect();
+
+    #[cfg(windows)]
+    {
+        for key in [
+            "USERPROFILE",
+            "APPDATA",
+            "PATH",
+            "PATHEXT",
+            "SystemRoot",
+            "ComSpec",
+        ] {
+            assert!(
+                inherited.contains(key),
+                "env_inherit must include {key}; got {inherited:?}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    {
+        for key in ["PATH", "HOME"] {
+            assert!(
+                inherited.contains(key),
+                "env_inherit must include {key}; got {inherited:?}"
+            );
+        }
+    }
+}

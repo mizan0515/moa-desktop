@@ -18,6 +18,7 @@ pub mod safety;
 pub mod settings;
 pub mod synthesis;
 pub mod telemetry;
+pub mod util;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -67,8 +68,8 @@ fn build_orch_deps() -> Option<orchestrator::OrchestrationDeps> {
     let repo_root = manifest.parent().map(|p| p.to_path_buf()).unwrap_or(manifest);
     let prompts_dir = repo_root.join("prompts").join("workers");
 
-    let claude_program = which("claude").unwrap_or_else(|| PathBuf::from("claude"));
-    let codex_program = which("codex").unwrap_or_else(|| PathBuf::from("codex"));
+    let claude_program = util::which::which("claude").unwrap_or_else(|| PathBuf::from("claude"));
+    let codex_program = util::which::which("codex").unwrap_or_else(|| PathBuf::from("codex"));
 
     let claude_config = adapters::claude::ClaudeConfig::from_dir(
         claude_program,
@@ -108,14 +109,3 @@ fn dirs_home() -> Option<PathBuf> {
     }
 }
 
-fn which(cmd: &str) -> Option<PathBuf> {
-    let exe = if cfg!(windows) { format!("{cmd}.exe") } else { cmd.to_string() };
-    let path_env = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_env) {
-        let candidate = dir.join(&exe);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
