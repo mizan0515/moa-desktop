@@ -1,6 +1,11 @@
 # Claude Code session metadata
 .claude-handoff.md
 .claude-handoff-*.md
+.claude/worktrees/
+
+# Tauri / Vite caches
+.vite/
+.tauri/
 
 # Build artifacts
 node_modules/

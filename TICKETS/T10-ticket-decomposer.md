@@ -62,6 +62,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 
 ## NEVER 영역
 - src-tauri/src/{parallel,integrator}/ body (T11/T12)
+- src-tauri/src/{policy,safety,commands,lifecycle}/ body (T13 owns)
 - src-tauri/src/{adapters,orchestrator,safety,git,lock,journal,synthesis,process}/ body
 - main repo 의 다른 ticket owns 영역
 - 비밀 파일
