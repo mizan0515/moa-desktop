@@ -84,6 +84,6 @@ rg -n "worker.*(codex exec|claude -p|/codex:|Claude MCP|Codex MCP)" TICKETS DESI
 ## 작업 완료 시
 
 1. commit: `docs(T15): add Pi runtime backlog and ticket graph` (본문에 `Closes #36` 포함)
-2. push + PR 생성.
-3. lead/orchestrator-owned `CodexAdversarialXHigh` docs review gate.
-4. GitHub 카드 #36 complete.
+2. lead/orchestrator-owned `CodexAdversarialXHigh` docs review gate on the local diff. If formal read-only review hits the documented WindowsApps policy block, record `ReviewRunError` and use controlled-bypass only under PROJECT-RULES.md conditions.
+3. push + PR 생성 only after the docs review gate is Clean.
+4. GitHub 카드 #36 complete after PR exists and the review gate evidence is recorded.

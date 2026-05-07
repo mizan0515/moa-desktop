@@ -108,7 +108,7 @@ T10 진입 전 필수 보강. GitHub EPIC: #35 (https://github.com/mizan0515/moa
 - **Q1·B**: `settings.primaryRole = "claude" | "codex"`. Codex 선택 시 synthesizer / default reviewer / Flow-C mutation owner 까지 Codex 로 스왑. lock state machine 은 이미 대칭 (`lock/manager.rs:45-47`) — 변경 X.
 - **Q2·단계별 confirm**: `/메인동기화` 류 destructive-network 명령은 4-5 step 사용자 확인. **자동화-2-개입 원칙 (§ 0.5)** 의 명시적 예외 — destructive scope 가 큰 명령은 step gate 우선.
 - **Q3·앱 backlog SOT**: 앱 내부 backlog 가 source of truth, `~/.claude/projects/<repo>/memory/` 는 단방향 mirror (앱 → 글로벌). 사용자가 다른 프로젝트에서 글로벌 read 가능.
-- **추가요구**: 병행티켓 흐름 (T10/T11/T12) 의 PR 생성/머지/통합/main 적용 단계마다 **lead/orchestrator-owned review gate** 를 둔다. 이 gate 는 **항상 `CodexAdversarialXHigh` review profile/prompt** 를 포함한다. MoA Desktop 앱 안에서는 source=orchestrator 의 review profile 이 실행하고, Codex Desktop 수동 개발 흐름에서는 사용자가 명시한 lead PowerShell `codex exec --ephemeral --sandbox read-only ... --output-last-message <repo>/.moa-desktop/reviews/<stamp>.md` 별도 review 가 같은 gate 증거가 될 수 있다. 앱 profile/PowerShell prompt 는 `/codex:adversarial-review --effort xhigh` 와 동등한 의도/강도이며 `reasoning_effort=xhigh`, prompt template version/hash, model/profile id, command/source adapter, source output path 를 `ReviewRunRecord` 에 남긴다. `--dangerously-bypass-approvals-and-sandbox` 는 mutation-in-worktree 전용이고 review gate 성공 증거로 쓰지 않는다. PrimaryRole=Codex 인 경우 Claude review 는 추가 대칭 검토로 붙일 수 있지만 Codex review 를 대체하지 않는다. gate 시점은 `pr_create` 전 local diff, `pr_merge` 전 PR diff, `integrate_merge` 전 통합 diff, `main_apply` 전 최종 diff 로 기록한다. 워커 prompt 에 `/codex:*`, `claude -p`, `codex exec` 직접 호출을 박는 nested peer-call 방식은 금지.
+- **추가요구**: 병행티켓 흐름 (T10/T11/T12) 의 PR 생성/머지/통합/main 적용 단계마다 **lead/orchestrator-owned review gate** 를 둔다. 이 gate 는 **항상 `CodexAdversarialXHigh` review profile/prompt** 를 포함한다. MoA Desktop 앱 안에서는 source=orchestrator 의 review profile 이 실행하고, Codex Desktop 수동 개발 흐름에서는 사용자가 명시한 lead PowerShell `codex exec --ephemeral --sandbox read-only ... --output-last-message <repo>/.moa-desktop/reviews/<stamp>.md` 별도 review 가 같은 gate 증거가 될 수 있다. 앱 profile/PowerShell prompt 는 `/codex:adversarial-review --effort xhigh` 와 동등한 의도/강도이며 `reasoning_effort=xhigh`, prompt template version/hash, model/profile id, command/source adapter, source output path 를 `ReviewRunRecord` 에 남긴다. `--dangerously-bypass-approvals-and-sandbox` 는 mutation-in-worktree 전용이나, formal read-only review 가 WindowsApps `pwsh.exe ... blocked by policy` `ENV_BLOCKED` signature 로 실패한 경우에 한해 PROJECT-RULES.md 의 controlled-bypass review gate 조건을 모두 만족하면 review evidence 로 인정한다. PrimaryRole=Codex 인 경우 Claude review 는 추가 대칭 검토로 붙일 수 있지만 Codex review 를 대체하지 않는다. gate 시점은 `pr_create` 전 local diff, `pr_merge` 전 PR diff, `integrate_merge` 전 통합 diff, `main_apply` 전 최종 diff 로 기록한다. 워커 prompt 에 `/codex:*`, `claude -p`, `codex exec` 직접 호출을 박는 nested peer-call 방식은 금지.
 - **글로벌 sync**: Claude-side 글로벌 **15 파일** (Hot 룰 6 = `CLAUDE/RTK/KARPATHY/TOKEN-GUARD/TICKET-CLOSE/CODEX-MCP` + On-demand 스킬 2 = `skills/{codex-mcp-runtime,token-guard-internals}/SKILL.md` + 한국어 단축명령 7) + Codex Desktop overlay `~/.codex/skills/병행티켓/SKILL.md`(존재 시) 변경분은 hash drift detect → 사용자 명시 import. 자동 적용 X. 추가로 `~/.claude/settings.json` 은 raw copy 가 아니라 safe subset 을 `RuntimeProfile` 로 import. PolicyPack 은 `source_manifest[]` + kind discriminator (HotRule / OnDemandSkill / TicketCloseRule / RuntimeHealthCheck / RuntimeSettings / CodexDesktopOverlay) 로 표현 — 글로벌이 또 분리되어도 schema 변경 불요. 글로벌 슬래시/스킬은 executable truth 가 아니라 **policy resolver 입력**이며, 현재 글로벌 명령이 앱 정책과 충돌하면 T13 L4 의 변환/override 규칙이 우선한다. Claude-side `/병행티켓` 과 Codex overlay 가 review gate vocabulary 또는 `command_source_adapter` 에서 충돌하면 fail closed 로 사용자 import/transform confirm 을 요구한다.
 
 EPIC 구조 (단일 ticket T13, 5 phase):
@@ -145,6 +145,7 @@ T15 structure:
 - **T15d** (#40): Pi Package Trust & Installer.
 - **T15e** (#41): Pi Extension UI Bridge.
 - **T15f** (#42): Pi Model Switch & Session Tree.
+- **T15g** (#43): MoA Native Pi Extensions.
 - **T16** (#44): Harness Marketplace / Equipment Profiles.
 - **T15INTEGRATE** (#45): Pi Runtime integration verification after T15b-g/T14/T16.
 
@@ -257,12 +258,15 @@ T0 (spike) ── 통과 후 Phase 1 진입
                                 │                                    │
                                 │                                    ├─ T15d (Pi Package Trust)
                                 │                                    ├─ T15e (Pi Extension UI Bridge)
-                                │                                    ├─ T15f (Pi Model / Session Tree)
-                                │                                    └─ T15g (MoA Native Pi Extensions)
+                                │                                    └─ T15f (Pi Model / Session Tree)
                                 │                                          │
-                                │                                          └─ T16 (Harness Marketplace)
+                                │                                          └─ fan-in: T15d + T15e + T15f
                                 │                                                │
-                                │                                                └─ T15INTEGRATE
+                                │                                                └─ T15g (MoA Native Pi Extensions)
+                                │                                                      │
+                                │                                                      └─ T16 (Harness Marketplace)
+                                │                                                            │
+                                │                                                            └─ T15INTEGRATE
                                 │
                                 ├─ T10 (Ticket Decomposer; runtimeKind-aware)
                                 │     │
@@ -291,7 +295,7 @@ T0 (spike) ── 통과 후 Phase 1 진입
 | T9 | 4 | `src-tauri/src/telemetry/*`, `src/components/CostMeter.tsx`, `src-tauri/src/cancel/*` | T2 | T2 |
 | **T20-GATE** | 5.5 | AppHandle 통합 테스트 보강 (#20) | orchestrator/Tauri test harness | T7-full |
 | **T13** | 5.5 | `src-tauri/src/{policy,safety,commands,lifecycle}/*`, settings/policy UI hooks | 글로벌 15 파일 + settings safe subset, T7-full | T20-GATE, T7-full |
-| **T15** | 5.6 | `DESIGN.md`, `PLAN.md`, `PROJECT-RULES.md`, `AGENTS.md`, `TICKETS/T15*.md`, `TICKETS/T16-harness-marketplace-equipment-profiles.md` | T10/T11/T12/T14 ticket docs | T13 docs/policy context |
+| **T15** | 5.6 | `DESIGN.md`, `PLAN.md`, `PROJECT-RULES.md`, `AGENTS.md`, `TICKETS/T15*.md`, `TICKETS/T16-harness-marketplace-equipment-profiles.md`, T10/T11/T12/T14 Pi amend sections only | T10/T11/T12/T14 non-amend ticket body | T13 docs/policy context |
 | **T15a** | 5.6 | `spikes/pi-compatibility.md`, `spikes/scripts/pi_*.ps1` | DESIGN.md, PLAN.md, T13 policy docs | T13 L2/L3 |
 | **T15b** | 5.6 | `src-tauri/src/adapters/pi_rpc.rs`, `src-tauri/src/pi/rpc.rs`, `src-tauri/tests/pi_rpc_*.rs` | T2 ProcessRunner, T13 guard/review schema, T15a report | T15a |
 | **T15c** | 5.6 | `sidecars/moa-pi-host/*`, `src-tauri/src/pi/sidecar.rs`, `docs/pi-sidecar-packaging.md` | T15b, T13 policy pack | T15b |
