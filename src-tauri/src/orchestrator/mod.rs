@@ -34,6 +34,9 @@ use crate::adapters::{
     claude::{ClaudeAdapter, ClaudeEvent, FirstPassRequest as ClaudeFirstPass},
     codex::{CodexAdapter, CodexEvent, FirstPassRequest as CodexFirstPass},
 };
+use crate::cancel::CancelRegistry;
+use crate::journal::schema::{Entry, Phase as JournalPhase};
+use crate::journal::writer::JournalWriter;
 use crate::lock::manager::{LockManager, LockSource};
 use crate::process::{ProcessControl, ProcessRunner};
 use crate::synthesis::{extract_from_text, WorkerEvent};
@@ -119,8 +122,16 @@ pub enum SessionCommand {
 
 struct SessionHandle {
     cancelled: Arc<AtomicBool>,
-    /// Currently active worker process control (for cancel mid-stream).
-    active: Arc<Mutex<Option<ProcessControl>>>,
+    /// FIX-F — registry of all live worker processes for this session.
+    /// Pre-FIX-F this was `Mutex<Option<ProcessControl>>` — a single slot
+    /// that only stored the *last* lane's handle. When two first-pass
+    /// adapters ran in parallel, lane B overwrote lane A's handle and
+    /// `cancel` only aborted lane B (lane A kept burning tokens until
+    /// natural exit). The CancelRegistry holds Arc-cloned controls under
+    /// stable run-ids ("claude-firstpass" / "codex-firstpass" / "mutation"
+    /// / "claude-adv-r{n}" / "codex-adv-r{n}") so `abort_all` walks every
+    /// lane.
+    active: Arc<CancelRegistry>,
     /// Channel to the driver task — frontend commands are routed here.
     cmd_tx: mpsc::Sender<SessionCommand>,
     /// Latest published state (best-effort snapshot for `get_state`).
@@ -174,13 +185,44 @@ impl OrchestrationCoordinator {
         let (cmd_tx, _cmd_rx) = mpsc::channel::<SessionCommand>(1);
         let h = SessionHandle {
             cancelled: Arc::new(AtomicBool::new(false)),
-            active: Arc::new(Mutex::new(None)),
+            active: Arc::new(CancelRegistry::new()),
             cmd_tx,
             state: Arc::new(Mutex::new(SessionState::Idle)),
             ack_tx: Mutex::new(Some(tx)),
         };
         self.register(sid, h).await;
         rx
+    }
+
+    /// FIX-F test hook — register a session whose `active` registry is
+    /// shared, so a test can pre-populate it with multiple `ProcessControl`
+    /// clones and assert `Cancel` aborts every one (not just the last).
+    #[doc(hidden)]
+    pub async fn register_with_active(
+        &self,
+        sid: &str,
+        active: Arc<CancelRegistry>,
+    ) -> mpsc::Receiver<SessionCommand> {
+        let (tx, rx) = oneshot::channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(8);
+        let h = SessionHandle {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            active,
+            cmd_tx,
+            state: Arc::new(Mutex::new(SessionState::Idle)),
+            ack_tx: Mutex::new(Some(tx)),
+        };
+        // Drop the ack receiver — caller doesn't need it.
+        drop(rx);
+        self.register(sid, h).await;
+        cmd_rx
+    }
+
+    /// FIX-F test hook — post a `Cancel` command. Mirrors the behaviour of
+    /// the live cancel path (atomic flag + abort every registered lane).
+    #[doc(hidden)]
+    pub async fn cancel_for_test(&self, sid: &str) -> bool {
+        self.post(sid, SessionCommand::Cancel).await
     }
 
     /// FIX-C — release the driver's first emit. Idempotent: returns true
@@ -205,10 +247,9 @@ impl OrchestrationCoordinator {
             // Mark cancel flag eagerly so any non-channel-aware loop sees it.
             if matches!(cmd, SessionCommand::Cancel) {
                 h.cancelled.store(true, Ordering::SeqCst);
-                let active = h.active.lock().await;
-                if let Some(ctl) = active.as_ref() {
-                    let _ = ctl.abort().await;
-                }
+                // FIX-F — abort every registered lane, not just the last
+                // one stored in a single-slot Mutex<Option<...>>.
+                let _ = h.active.abort_all().await;
             }
             h.cmd_tx.send(cmd).await.is_ok()
         } else {
@@ -237,6 +278,10 @@ pub struct OrchestrationDeps {
     pub lock_manager: LockManager,
     pub claude_config: crate::adapters::claude::ClaudeConfig,
     pub codex_config: crate::adapters::codex::CodexConfig,
+    /// FIX-F — base dir for `JournalWriter`. Live: `~/.moa-desktop`. When
+    /// `None` (legacy/test paths) journal is best-effort skipped — the
+    /// orchestrator never panics on absent journal infrastructure.
+    pub journal_base_dir: Option<PathBuf>,
 }
 
 impl OrchestrationDeps {
@@ -263,7 +308,13 @@ struct DriverCtx {
     app: AppHandle,
     sid: String,
     cancelled: Arc<AtomicBool>,
-    active: Arc<Mutex<Option<ProcessControl>>>,
+    /// FIX-F — shared with `SessionHandle.active`. The driver registers a
+    /// `ProcessControl` under a stable run-id (`<lane>-<phase>[-r{round}]`)
+    /// before draining its events and unregisters on completion.
+    active: Arc<CancelRegistry>,
+    /// FIX-F — best-effort journal. `None` only when the deps did not
+    /// configure a journal base dir (tests that don't touch durability).
+    journal: Option<JournalWriter>,
     state: Arc<Mutex<SessionState>>,
     /// FIX-C — set true once the frontend has acked. Read by the cleanup
     /// task to decide whether a panic-path `session_error` should fire:
@@ -385,18 +436,58 @@ async fn drive_session(
     };
 
     // 4. Adversarial round(s) ──────────────────────────────────────────────
-    if flow.needs_full_moa() {
+    // FIX-F — `Approved` is the only outcome that lets mutation run.
+    // `Escalated` (Unknown / NeedClarification / max-rounds-exhausted-without-fail)
+    // routes to `Final { ok: false }` instead of silently proceeding.
+    let adv_outcome = if flow.needs_full_moa() {
         match run_adversarial_loop(&ctx, &start, &deps, flow, &synthesis_json).await {
-            Ok(()) => {}
+            Ok(o) => o,
             Err(e) => return finalize_failed(&ctx, e).await,
         }
+    } else {
+        AdversarialResult::Approved
+    };
+
+    if let AdversarialResult::Escalated { reason, round } = adv_outcome {
+        // Mutation forbidden. Surface a structured `Final` so the frontend
+        // can render the escalation reason instead of a green check.
+        if let Some(j) = ctx.journal.as_ref() {
+            let _ = j.note(
+                JournalPhase::SessionEnd,
+                format!("escalated reason={reason} round={round}"),
+            );
+        }
+        ctx.set_state(SessionState::Final { flow, ok: false }).await;
+        emit(
+            &ctx.app,
+            &ctx.sid,
+            Phase::Final,
+            Some(Lane::System),
+            "session_done",
+            Some(serde_json::json!({
+                "flow": flow.as_str(),
+                "ok": false,
+                "reason": reason,
+                "round": round,
+            })),
+        );
+        return;
     }
 
     // 5. Mutation (Flow A/B/C only) — D is read-only. ─────────────────────
+    let mut session_ok = true;
+    let mut session_reason: Option<String> = None;
     if flow.produces_mutation() {
         match run_mutation_phase(&ctx, &start, &deps, flow, &mut cmd_rx).await {
             Ok(MutationOutcome::Applied) => {
-                run_verify_phase(&ctx, &start).await;
+                let outcome = run_verify_phase(&ctx, &start, flow).await;
+                // FIX-F — verify outcome is now load-bearing for `Final.ok`.
+                // Pre-FIX-F the driver always emitted `ok: true`, even when
+                // `cargo check` failed post-mutation.
+                if !outcome.is_ok() {
+                    session_ok = false;
+                    session_reason = Some(format!("verify-failed: {outcome:?}"));
+                }
             }
             Ok(MutationOutcome::Skipped) => {
                 emit(
@@ -413,14 +504,27 @@ async fn drive_session(
     }
 
     // 6. Final ────────────────────────────────────────────────────────────
-    ctx.set_state(SessionState::Final { flow, ok: true }).await;
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.note(
+            JournalPhase::SessionEnd,
+            format!("ok={session_ok}"),
+        );
+    }
+    ctx.set_state(SessionState::Final { flow, ok: session_ok }).await;
+    let mut payload = serde_json::json!({
+        "flow": flow.as_str(),
+        "ok": session_ok,
+    });
+    if let Some(r) = session_reason {
+        payload["reason"] = serde_json::Value::String(r);
+    }
     emit(
         &ctx.app,
         &ctx.sid,
         Phase::Final,
         Some(Lane::System),
         "session_done",
-        Some(serde_json::json!({ "flow": flow.as_str() })),
+        Some(payload),
     );
 }
 
@@ -493,10 +597,10 @@ async fn run_first_pass_pair(
             .firstpass(req_claude)
             .await
             .map_err(|e| format!("claude firstpass spawn: {e}"))?;
-        store_active(&active_a, Some(stream.control.clone())).await;
+        track_active(&active_a, "claude-firstpass", stream.control.clone());
         let n = drain_claude_events(&app_a, &sid_a, Phase::FirstPass, Lane::Claude, stream.events, &cancelled_a)
             .await;
-        store_active(&active_a, None).await;
+        untrack_active(&active_a, "claude-firstpass");
         Ok(n)
     });
 
@@ -509,12 +613,13 @@ async fn run_first_pass_pair(
             .firstpass(req_codex)
             .await
             .map_err(|e| format!("codex firstpass spawn: {e}"))?;
-        // Note: T2 ProcessControl is shared; we only track one in `active` for
-        // cancel — first-arrival wins, the other is aborted via supervisor abort.
-        store_active(&active_b, Some(stream.control.clone())).await;
+        // FIX-F — both lanes register independently in the CancelRegistry,
+        // so a mid-stream cancel aborts both (pre-FIX-F we tracked only one
+        // and let the other keep burning tokens until natural exit).
+        track_active(&active_b, "codex-firstpass", stream.control.clone());
         let n = drain_codex_events(&app_b, &sid_b, Phase::FirstPass, Lane::Codex, stream.events, &cancelled_b)
             .await;
-        store_active(&active_b, None).await;
+        untrack_active(&active_b, "codex-firstpass");
         Ok(n)
     });
 
@@ -550,8 +655,15 @@ fn lane_result(r: Result<Result<usize, String>, LaneError>, lane: &str) -> Resul
     }
 }
 
-async fn store_active(slot: &Mutex<Option<ProcessControl>>, val: Option<ProcessControl>) {
-    *slot.lock().await = val;
+/// FIX-F — register/unregister a worker under a stable run-id so cancel
+/// can abort every live lane. Replaces the single-slot
+/// `Mutex<Option<ProcessControl>>` used pre-FIX-F.
+fn track_active(reg: &CancelRegistry, run_id: &str, ctl: ProcessControl) {
+    reg.register(run_id.to_string(), ctl);
+}
+
+fn untrack_active(reg: &CancelRegistry, run_id: &str) {
+    reg.unregister(run_id);
 }
 
 /// Emit a canonical WorkerEvent on `kind="line"`. The TS-side
@@ -705,13 +817,25 @@ async fn await_synthesis(
 
 // ─── adversarial round(s) ─────────────────────────────────────────────────
 
+/// FIX-F — outcome of the adversarial loop seen by `drive_session`.
+/// Pre-FIX-F the function returned `Result<(), String>` and treated
+/// `Pass | Unknown` as "approved" — Unknown is *not* approval, the
+/// reviewer just failed to emit a parseable verdict header. We now split
+/// "approved" from "escalated, mutation forbidden" so the driver can
+/// short-circuit cleanly and emit `Final { ok: false }` instead of
+/// silently letting an unverified synthesis touch files.
+enum AdversarialResult {
+    Approved,
+    Escalated { reason: &'static str, round: u32 },
+}
+
 async fn run_adversarial_loop(
     ctx: &DriverCtx,
     start: &OrchestrationStart,
     deps: &Arc<OrchestrationDeps>,
     flow: Flow,
     synthesis_json: &str,
-) -> Result<(), String> {
+) -> Result<AdversarialResult, String> {
     let mut round = 1u32;
     loop {
         if ctx.is_cancelled() {
@@ -752,7 +876,8 @@ async fn run_adversarial_loop(
                     .firstpass(req)
                     .await
                     .map_err(|e| format!("codex adversarial spawn: {e}"))?;
-                store_active(&ctx.active, Some(stream.control.clone())).await;
+                let run_id = format!("codex-adv-r{round}");
+                track_active(&ctx.active, &run_id, stream.control.clone());
                 let mut text = String::new();
                 let mut rx = stream.events;
                 while let Some(ev) = rx.recv().await {
@@ -785,7 +910,7 @@ async fn run_adversarial_loop(
                         break;
                     }
                 }
-                store_active(&ctx.active, None).await;
+                untrack_active(&ctx.active, &run_id);
                 adversarial::parse_verdict(&text)
             }
             _ => {
@@ -799,7 +924,8 @@ async fn run_adversarial_loop(
                     .firstpass(req)
                     .await
                     .map_err(|e| format!("claude adversarial spawn: {e}"))?;
-                store_active(&ctx.active, Some(stream.control.clone())).await;
+                let run_id = format!("claude-adv-r{round}");
+                track_active(&ctx.active, &run_id, stream.control.clone());
                 let mut text = String::new();
                 let mut rx = stream.events;
                 while let Some(ev) = rx.recv().await {
@@ -830,7 +956,7 @@ async fn run_adversarial_loop(
                         break;
                     }
                 }
-                store_active(&ctx.active, None).await;
+                untrack_active(&ctx.active, &run_id);
                 adversarial::parse_verdict(&text)
             }
         };
@@ -844,37 +970,40 @@ async fn run_adversarial_loop(
             Some(serde_json::json!({ "round": round, "verdict": format!("{verdict:?}") })),
         );
 
-        match verdict {
-            adversarial::Verdict::Pass | adversarial::Verdict::Unknown => return Ok(()),
-            adversarial::Verdict::NeedClarification => {
-                // Treated as user-escalation — emit and stop the loop.
+        // FIX-F — pure decision (testable in `adversarial::tests`); the
+        // I/O loop only emits + transitions based on its result.
+        match adversarial::decide(verdict, round, MAX_ADVERSARIAL_ROUNDS) {
+            adversarial::AdversarialDecision::Approved => {
+                return Ok(AdversarialResult::Approved);
+            }
+            adversarial::AdversarialDecision::EscalateNoMutation { reason, round: r } => {
                 emit(
                     &ctx.app,
                     &ctx.sid,
                     Phase::Adversarial,
                     Some(Lane::System),
                     "escalation",
-                    Some(serde_json::json!({ "reason": "need-clarification", "round": round })),
+                    Some(serde_json::json!({ "reason": reason, "round": r })),
                 );
-                return Ok(());
+                return Ok(AdversarialResult::Escalated { reason, round: r });
             }
-            adversarial::Verdict::Blocker => {
-                if round >= MAX_ADVERSARIAL_ROUNDS {
-                    emit(
-                        &ctx.app,
-                        &ctx.sid,
-                        Phase::Adversarial,
-                        Some(Lane::System),
-                        "escalation",
-                        Some(serde_json::json!({
-                            "reason": "max-rounds-exceeded",
-                            "round": round,
-                            "max": MAX_ADVERSARIAL_ROUNDS,
-                        })),
-                    );
-                    return Err(format!("adversarial blocker after {round} rounds"));
-                }
-                round += 1;
+            adversarial::AdversarialDecision::EscalateBlocker { round: r } => {
+                emit(
+                    &ctx.app,
+                    &ctx.sid,
+                    Phase::Adversarial,
+                    Some(Lane::System),
+                    "escalation",
+                    Some(serde_json::json!({
+                        "reason": "max-rounds-exceeded",
+                        "round": r,
+                        "max": MAX_ADVERSARIAL_ROUNDS,
+                    })),
+                );
+                return Err(format!("adversarial blocker after {r} rounds"));
+            }
+            adversarial::AdversarialDecision::Retry { next_round } => {
+                round = next_round;
             }
         }
     }
@@ -951,11 +1080,34 @@ async fn run_mutation_phase(
         .acquire_lane(&project_guard, &lock_key, owner_worker, LockSource::Scheduler)
         .map_err(|e| format!("acquire lane lock: {e}"))?;
 
+    // FIX-F — durability hook: the lane lock is now ours. Journal the
+    // acquisition so a crash recovery can see "we held a lane on session X
+    // when we died" before any FS-touching work begins.
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.append(Entry {
+            seq: 0,
+            ts_ms: 0,
+            phase: JournalPhase::LockAcquired,
+            owner: Some(owner_worker),
+            pid: 0,
+            base_hashes: Default::default(),
+            patch_path: None,
+            note: Some(format!("project={} lock_key={}", &start.project_id, &lock_key)),
+        });
+    }
+
     // Worktree creation: under <repo>/.moa-desktop/worktrees/<sid>
     let wt_root = start.cwd.join(".moa-desktop").join("worktrees").join(&ctx.sid);
     let branch = Some(format!("orch/{}", &ctx.sid));
     let wt = crate::git::Worktree::add(&start.cwd, &wt_root, branch.as_deref())
         .map_err(|e| format!("worktree add: {e}"))?;
+
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.note(
+            JournalPhase::WorktreeCreated,
+            wt.path.display().to_string(),
+        );
+    }
 
     emit(
         &ctx.app,
@@ -978,7 +1130,10 @@ async fn run_mutation_phase(
                 .mutation(req)
                 .await
                 .map_err(|e| format!("claude mutation spawn: {e}"))?;
-            store_active(&ctx.active, Some(stream.control.clone())).await;
+            track_active(&ctx.active, "mutation", stream.control.clone());
+            if let Some(j) = ctx.journal.as_ref() {
+                let _ = j.note(JournalPhase::WorkerStarted, "claude-mutation");
+            }
             let n = drain_claude_events(
                 &ctx.app,
                 &ctx.sid,
@@ -988,7 +1143,7 @@ async fn run_mutation_phase(
                 &ctx.cancelled,
             )
             .await;
-            store_active(&ctx.active, None).await;
+            untrack_active(&ctx.active, "mutation");
             n
         }
         Lane::Codex => {
@@ -1001,7 +1156,10 @@ async fn run_mutation_phase(
                 .mutation(req)
                 .await
                 .map_err(|e| format!("codex mutation spawn: {e}"))?;
-            store_active(&ctx.active, Some(stream.control.clone())).await;
+            track_active(&ctx.active, "mutation", stream.control.clone());
+            if let Some(j) = ctx.journal.as_ref() {
+                let _ = j.note(JournalPhase::WorkerStarted, "codex-mutation");
+            }
             let n = drain_codex_events(
                 &ctx.app,
                 &ctx.sid,
@@ -1011,11 +1169,18 @@ async fn run_mutation_phase(
                 &ctx.cancelled,
             )
             .await;
-            store_active(&ctx.active, None).await;
+            untrack_active(&ctx.active, "mutation");
             n
         }
         Lane::System => return Err("system lane cannot mutate".into()),
     };
+
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.note(
+            JournalPhase::WorkerFinished,
+            format!("events={worker_result}"),
+        );
+    }
 
     emit(
         &ctx.app,
@@ -1035,6 +1200,18 @@ async fn run_mutation_phase(
     let patch_dir = start.cwd.join(".moa-desktop").join("patches").join(&ctx.sid);
     let patch = crate::git::patch::extract(&wt, &patch_dir, "mutation")
         .map_err(|e| format!("patch extract: {e}"))?;
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.append(Entry {
+            seq: 0,
+            ts_ms: 0,
+            phase: JournalPhase::PatchExtracted,
+            owner: Some(owner_worker),
+            pid: 0,
+            base_hashes: Default::default(),
+            patch_path: Some(patch.path.display().to_string()),
+            note: Some(format!("size={} empty={}", patch.text.len(), patch.is_empty())),
+        });
+    }
     emit(
         &ctx.app,
         &ctx.sid,
@@ -1061,9 +1238,32 @@ async fn run_mutation_phase(
         return Ok(MutationOutcome::Skipped);
     }
 
-    crate::git::patch::check(&start.cwd, &patch).map_err(|e| format!("patch check: {e}"))?;
+    crate::git::patch::check(&start.cwd, &patch).map_err(|e| {
+        if let Some(j) = ctx.journal.as_ref() {
+            let _ = j.note(JournalPhase::PatchRejected, format!("check failed: {e}"));
+        }
+        format!("patch check: {e}")
+    })?;
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.note(JournalPhase::PatchVerified, "");
+    }
     crate::git::patch::apply(&start.cwd, &patch).map_err(|e| format!("patch apply: {e}"))?;
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.append(Entry {
+            seq: 0,
+            ts_ms: 0,
+            phase: JournalPhase::PatchApplied,
+            owner: Some(owner_worker),
+            pid: 0,
+            base_hashes: Default::default(),
+            patch_path: Some(patch.path.display().to_string()),
+            note: None,
+        });
+    }
     let _ = wt.remove();
+    if let Some(j) = ctx.journal.as_ref() {
+        let _ = j.note(JournalPhase::WorktreeRemoved, "");
+    }
 
     emit(
         &ctx.app,
@@ -1078,11 +1278,12 @@ async fn run_mutation_phase(
 
 // ─── verify phase ─────────────────────────────────────────────────────────
 
-async fn run_verify_phase(ctx: &DriverCtx, start: &OrchestrationStart) {
-    ctx.set_state(SessionState::Verifying {
-        flow: Flow::C, // best-effort label; the actual flow is in last state but unused downstream
-    })
-    .await;
+async fn run_verify_phase(
+    ctx: &DriverCtx,
+    start: &OrchestrationStart,
+    flow: Flow,
+) -> verify::VerifyOutcome {
+    ctx.set_state(SessionState::Verifying { flow }).await;
     emit(&ctx.app, &ctx.sid, Phase::Verify, Some(Lane::System), "phase_start", None);
 
     let mut spec = verify::VerifySpec::new(&start.cwd);
@@ -1098,6 +1299,7 @@ async fn run_verify_phase(ctx: &DriverCtx, start: &OrchestrationStart) {
         "phase_end",
         Some(serde_json::json!({ "outcome": outcome })),
     );
+    outcome
 }
 
 // ─── Tauri commands ───────────────────────────────────────────────────────
@@ -1111,10 +1313,23 @@ pub async fn orch_start(
 ) -> Result<String, String> {
     let sid = OrchestrationCoordinator::new_session_id();
     let cancelled = Arc::new(AtomicBool::new(false));
-    let active = Arc::new(Mutex::new(None));
+    let active = Arc::new(CancelRegistry::new());
     let state = Arc::new(Mutex::new(SessionState::Idle));
     let (tx, rx) = mpsc::channel::<SessionCommand>(32);
     let (ack_tx, ack_rx) = oneshot::channel::<()>();
+
+    // FIX-F — open the per-session journal up-front. Best-effort: if the
+    // base dir is unset (test deps) or open() fails (FS issue), we
+    // continue without journal rather than fail orch_start.
+    let journal = deps.journal_base_dir.as_ref().and_then(|base| {
+        match JournalWriter::open(base, &start.project_id, &sid) {
+            Ok(w) => {
+                let _ = w.note(JournalPhase::SessionStart, format!("task={}", start.task));
+                Some(w)
+            }
+            Err(_) => None,
+        }
+    });
 
     coord
         .register(
@@ -1135,6 +1350,7 @@ pub async fn orch_start(
         sid: sid.clone(),
         cancelled,
         active,
+        journal,
         state,
         acked: acked.clone(),
     };

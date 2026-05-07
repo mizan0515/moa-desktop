@@ -37,7 +37,13 @@ pub fn run() {
 
     let mut builder = builder
         .manage(orchestrator::dryrun::DryRunCoordinator::new())
-        .manage(orchestrator::OrchestrationCoordinator::new());
+        .manage(orchestrator::OrchestrationCoordinator::new())
+        // FIX-F — register T9 telemetry store as managed state so future
+        // adapter/usage callbacks can record into it without recreating an
+        // ad-hoc instance per session. Cap eviction is unnecessary: the
+        // store keys by (project, session) and a single app run aggregates
+        // at most O(N_sessions) entries, well below any sensible ceiling.
+        .manage(Arc::new(telemetry::TelemetryStore::new()));
 
     // T7-full deps — best-effort. If prompt templates are missing (dev env
     // without `prompts/workers/`), `orch_start` returns an error pointing
@@ -94,12 +100,20 @@ fn build_orch_deps() -> Option<orchestrator::OrchestrationDeps> {
     let mock_runner: Arc<dyn process::ProcessRunner> =
         Arc::new(mock::MockRunner::new(repo_root.join("mockResponses").join("noop.json")));
 
+    // FIX-F — journal base dir defaults to `~/.moa-desktop`. Falls back to
+    // a process-local temp subdir if HOME is unresolvable so tests / CI
+    // never crash spawn time on an absent env var.
+    let journal_base_dir = dirs_home()
+        .map(|h| h.join(".moa-desktop"))
+        .or_else(|| Some(std::env::temp_dir().join("moa-desktop")));
+
     Some(orchestrator::OrchestrationDeps {
         real_runner,
         mock_runner,
         lock_manager: lock::manager::LockManager::new(),
         claude_config,
         codex_config,
+        journal_base_dir,
     })
 }
 
