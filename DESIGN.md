@@ -125,8 +125,9 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true
 Mutation template (lock owner=codex 일 때만):
 ```
 codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true \
-  --sandbox workspace-write --json --cd <worktree> <prompt>
+  --dangerously-bypass-approvals-and-sandbox --json --cd <worktree> <prompt>
 ```
+- ⚠️ Windows S2 finding #5: `--sandbox workspace-write` is BROKEN on Windows (codex command-policy rejects PowerShell writes with `blocked by policy`). Mutation MUST use `--dangerously-bypass-approvals-and-sandbox` inside an **isolated worktree** (under `~/.moa-desktop/worktrees/`) — orchestrator T4 lock + git worktree are the safety boundary, not the codex sandbox. Source of truth: `src-tauri/src/adapters/codex.rs::mutation_argv`.
 - ❌ `--reasoning-effort` 직접 flag 는 unsupported (`error: unexpected argument`)
 - 6 항목 의무: success criteria, NEVER 영역, validation cmds, files+lines, alternatives 2개, tests-first
 - mutation: lock owner=codex 일 때만, 최신 re-read + diff checkpoint 후
