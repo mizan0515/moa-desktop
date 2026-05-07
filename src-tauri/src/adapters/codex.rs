@@ -57,9 +57,11 @@ pub struct CodexConfig {
     pub firstpass_template: String,
     /// Mutation prompt template; `{{task}}` and `{{worktree}}` substituted.
     pub mutation_template: String,
-    /// Spawn env. Must include `CODEX_HOME` pointing at a non-temp directory
-    /// (S2 finding #7) plus the standard Windows env-inherit set
-    /// (PATH, USERPROFILE, APPDATA, LOCALAPPDATA, SystemRoot, TEMP, TMP).
+    /// Plugin-specific spawn env. Must include `CODEX_HOME` pointing at a
+    /// non-temp directory (S2 finding #7). OS-level inherit keys (PATH,
+    /// PATHEXT, USERPROFILE, APPDATA, LOCALAPPDATA, SystemRoot, TEMP, TMP,
+    /// ComSpec) are supplied by `ProcessSpec.env_inherit` at spawn time, not
+    /// here.
     pub env: HashMap<String, String>,
 }
 

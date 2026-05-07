@@ -1,11 +1,15 @@
 //! Cross-platform `which` — finds an executable on `PATH`.
 //!
-//! Windows-aware: tries every extension listed in `PATHEXT` (default
-//! `.COM;.EXE;.BAT;.CMD;.PS1`) plus the bare name, in that order. This
-//! matters because npm-installed CLIs (`claude`, `codex`) ship as
-//! `*.cmd` / `*.ps1` shims, NOT as `.exe`. Restricting the search to
-//! `cmd.exe` would silently fall back to a relative `PathBuf::from("cmd")`
-//! and explode at spawn time.
+//! Windows-aware: walks `PATHEXT` (or fallback `.COM;.EXE;.BAT;.CMD`) plus
+//! the bare name, in that order. This matters because npm-installed CLIs
+//! (`claude`, `codex`) ship as `*.cmd` shims, NOT as `.exe`. Restricting the
+//! search to `cmd.exe` would silently fall back to a relative
+//! `PathBuf::from("cmd")` and explode at spawn time.
+//!
+//! Spawn-unsafe extensions (`.PS1`, `.PSM1`, `.VBS`) are filtered even when
+//! present in the user's PATHEXT — `Command::new("foo.ps1")` cannot be
+//! launched directly by `CreateProcessW`; a wrapper resolver is required.
+//! See `SPAWN_UNSAFE_EXTENSIONS` below.
 
 use std::path::{Path, PathBuf};
 
