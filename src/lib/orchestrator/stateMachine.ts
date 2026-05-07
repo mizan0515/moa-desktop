@@ -87,6 +87,10 @@ type Listener = () => void;
 const store: Store = { sessions: {} };
 const listeners = new Set<Listener>();
 let unlisten: UnlistenFn | null = null;
+// FIX-C — concurrent first callers used to each invoke `listen()` (the
+// existing `if (unlisten) return` only guards after the await resolved).
+// Memoize the in-flight subscription so all callers share a single bus.
+let subscribePromise: Promise<void> | null = null;
 
 function notify(): void {
   for (const l of listeners) l();
@@ -113,9 +117,13 @@ function ensureSession(sid: string, task = ""): OrchSession {
 
 async function ensureSubscribed(): Promise<void> {
   if (unlisten) return;
-  unlisten = await listen<OrchEvent>("orch://event", (e) => {
-    void onEvent(e.payload);
-  });
+  if (subscribePromise) return subscribePromise;
+  subscribePromise = (async () => {
+    unlisten = await listen<OrchEvent>("orch://event", (e) => {
+      void onEvent(e.payload);
+    });
+  })();
+  return subscribePromise;
 }
 
 async function onEvent(ev: OrchEvent): Promise<void> {
@@ -281,11 +289,15 @@ export async function orchStart(args: OrchStartArgs): Promise<string> {
       verify_cmd: args.verifyCmd,
     },
   });
-  // Pre-create the session shell so UI sees it immediately, before the
-  // first event lands.
+  // FIX-C — register the session in our store BEFORE telling the backend
+  // it is safe to emit. The Rust driver parks on a oneshot until the ack
+  // below fires, which guarantees `session_start` lands on a session shell
+  // we already have. `onEvent` still self-heals via `ensureSession` if any
+  // event slips through out of order (e.g. backend timeout fallback).
   ensureSession(sid, args.task);
   store.active = sid;
   notify();
+  await invoke("orch_ack", { sessionId: sid });
   return sid;
 }
 
@@ -309,4 +321,6 @@ export function __resetForTests(): void {
   for (const sid of Object.keys(store.sessions)) delete store.sessions[sid];
   store.active = undefined;
   listeners.clear();
+  unlisten = null;
+  subscribePromise = null;
 }

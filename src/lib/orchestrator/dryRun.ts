@@ -152,8 +152,16 @@ function tsNow(): string {
 }
 
 function ingest(ev: DryRunEvent) {
-  const sess = getSession(ev.session_id);
-  if (!sess) return;
+  // FIX-C — defensive: if an event somehow arrives for a sid we have not
+  // inserted yet, register a placeholder so it is not dropped. The new
+  // ack handshake (`dryrun_ack`) makes this a cold path on the happy
+  // flow, but the safety net mirrors the production orchestrator store.
+  let sess = getSession(ev.session_id);
+  if (!sess) {
+    if (ev.kind !== "session_start" && ev.kind !== "phase_start") return;
+    sess = emptySession(ev.session_id, "");
+    store.sessions.unshift(sess);
+  }
   const lane = ev.lane ?? "system";
 
   switch (ev.kind) {
@@ -266,10 +274,11 @@ function absorbLine(
 }
 
 async function ensureListener() {
-  if (unlistenPromise) return;
+  if (unlistenPromise) return unlistenPromise;
   unlistenPromise = listen<DryRunEvent>("dryrun://event", (e) => {
     ingest(e.payload);
   });
+  return unlistenPromise;
 }
 
 export const dryRunStore = {
@@ -291,9 +300,12 @@ export const dryRunStore = {
   async start(task: string): Promise<string> {
     await ensureListener();
     const sid = await invoke<string>("dryrun_start", { task });
+    // FIX-C — insert the session shell BEFORE the ack so the backend's
+    // first emit lands on a record we already have.
     store.sessions.unshift(emptySession(sid, task));
     store.activeSessionId = sid;
     notify();
+    await invoke("dryrun_ack", { sessionId: sid });
     return sid;
   },
   async cancel(sid: string): Promise<boolean> {

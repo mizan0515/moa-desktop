@@ -40,6 +40,8 @@ cd D:\moa-desktop && git fetch origin master 2>/dev/null; git log master --oneli
 - [ ] integration test: small task end-to-end (mock Workers 로) + small real task (사용자 confirm 후)
 - [ ] **Lane supervisor + panic boundary** (Phase 6 multi-project crash isolation 흡수책): 각 lane orchestrator instance 를 격리된 Tokio task 로 spawn, panic 감지 시 해당 lane 만 fail (다른 lane/UI 영향 0). lane drop 시 child process abort + lock release + journal close 의무. unit test: `lane_panic_does_not_kill_app`
 
+> **2026-05-07 FIX-C addendum (PR #31)** — Tauri 의 invoke-reply channel 과 event channel 이 독립적이라 driver 의 첫 emit 이 frontend 의 store 삽입을 앞지를 수 있었다. 신규 contract: `orch_start` 는 sid 만 반환, driver 는 `orch_ack(sessionId)` oneshot 까지 park. frontend 흐름은 `invoke(orch_start) → ensureSession() → notify() → invoke(orch_ack)`. session_id 는 `orch-{ms}-{AtomicU64}` 로 collision-free. 향후 `orch_*` command 추가 또는 `drive_session` 변경 시 본 handshake 를 깨지 말 것 — 깨면 panic-path `session_error` 가 frontend store 에 phantom 세션을 만든다.
+
 ## Files owned
 - `src-tauri/src/orchestrator/{mod.rs,state.rs,flow.rs,adversarial.rs,verify.rs}` (단 dryrun.rs 는 T7-thin 영역, T7-full 이 import 만)
 - `src/lib/orchestrator/stateMachine.ts` (frontend state)

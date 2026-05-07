@@ -20,13 +20,20 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
+
+/// FIX-C — monotonic suffix for dryrun session ids. See `new_session_id`.
+static DRYRUN_SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// FIX-C — driver waits for `dryrun_ack` before its first emit. Same
+/// rationale as the production orchestrator (`mod.rs::ACK_TIMEOUT`).
+const DRYRUN_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 use crate::mock::MockRunner;
 use crate::process::{ProcessControl, ProcessRunner, ProcessSpec};
@@ -107,6 +114,8 @@ fn emit(
 struct SessionHandle {
     cancelled: Arc<AtomicBool>,
     active: Arc<Mutex<Option<ProcessControl>>>,
+    /// FIX-C — same emit-ordering handshake as the production orchestrator.
+    ack_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 #[derive(Default)]
@@ -119,16 +128,30 @@ impl DryRunCoordinator {
         Self::default()
     }
 
+    /// FIX-C — `dr-{ms}` collided when two `dryrun_start` calls landed in the
+    /// same millisecond. Add a process-wide atomic counter suffix.
     fn new_session_id() -> String {
         let ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        format!("dr-{ms}")
+        let n = DRYRUN_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("dr-{ms}-{n}")
     }
 
     async fn register(&self, sid: &str, handle: SessionHandle) {
         self.sessions.lock().await.insert(sid.to_string(), handle);
+    }
+
+    /// FIX-C — release the parked driver. Idempotent.
+    pub async fn ack(&self, sid: &str) -> bool {
+        let map = self.sessions.lock().await;
+        let Some(h) = map.get(sid) else { return false };
+        let mut slot = h.ack_tx.lock().await;
+        match slot.take() {
+            Some(tx) => tx.send(()).is_ok(),
+            None => false,
+        }
     }
 
     async fn unregister(&self, sid: &str) {
@@ -226,7 +249,21 @@ async fn run_mock_phase(
 /// version (Claude then Codex, same phase) — the UI still treats them as
 /// independent lanes via the `lane` field, and T7-full will parallelize them
 /// once real adapters land.
-async fn run_session(app: AppHandle, sid: String, task: String, handle: SessionHandle) {
+async fn run_session(
+    app: AppHandle,
+    sid: String,
+    task: String,
+    handle: SessionHandle,
+    ack_rx: oneshot::Receiver<()>,
+) {
+    // FIX-C — gate the first emit on the frontend's ack. Same rationale as
+    // the production orchestrator. On timeout / sender-dropped the
+    // frontend has no record of this sid, so exit silently.
+    match tokio::time::timeout(DRYRUN_ACK_TIMEOUT, ack_rx).await {
+        Ok(Ok(())) => {}
+        _ => return,
+    }
+
     emit(
         &app,
         &sid,
@@ -283,13 +320,18 @@ pub async fn dryrun_start(
     task: String,
 ) -> Result<String, String> {
     let sid = DryRunCoordinator::new_session_id();
+    let (ack_tx, ack_rx) = oneshot::channel::<()>();
     let handle = SessionHandle {
         cancelled: Arc::new(AtomicBool::new(false)),
         active: Arc::new(Mutex::new(None)),
+        ack_tx: Mutex::new(Some(ack_tx)),
     };
     let handle_clone = SessionHandle {
         cancelled: handle.cancelled.clone(),
         active: handle.active.clone(),
+        // The driver's clone never holds the ack sender — it is owned by
+        // the registered handle so `dryrun_ack` can take it.
+        ack_tx: Mutex::new(None),
     };
     coordinator.register(&sid, handle).await;
 
@@ -297,13 +339,30 @@ pub async fn dryrun_start(
     let sid_for_task = sid.clone();
 
     tokio::spawn(async move {
-        run_session(app_for_task.clone(), sid_for_task.clone(), task, handle_clone).await;
+        run_session(
+            app_for_task.clone(),
+            sid_for_task.clone(),
+            task,
+            handle_clone,
+            ack_rx,
+        )
+        .await;
         if let Some(coord) = app_for_task.try_state::<DryRunCoordinator>() {
             coord.unregister(&sid_for_task).await;
         }
     });
 
     Ok(sid)
+}
+
+/// FIX-C — frontend acknowledges the session shell is in the store; releases
+/// the driver to emit `session_start`.
+#[tauri::command]
+pub async fn dryrun_ack(
+    coordinator: State<'_, DryRunCoordinator>,
+    session_id: String,
+) -> Result<bool, String> {
+    Ok(coordinator.ack(&session_id).await)
 }
 
 #[tauri::command]
