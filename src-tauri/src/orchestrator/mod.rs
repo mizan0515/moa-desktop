@@ -36,6 +36,7 @@ use crate::adapters::{
 };
 use crate::lock::manager::{LockManager, LockSource};
 use crate::process::{ProcessControl, ProcessRunner};
+use crate::synthesis::{extract_from_text, WorkerEvent};
 
 use self::flow::{classify, ClassifyInput};
 use self::state::{Flow, Lane, Phase, SessionState, MAX_ADVERSARIAL_ROUNDS};
@@ -480,6 +481,83 @@ async fn store_active(slot: &Mutex<Option<ProcessControl>>, val: Option<ProcessC
     *slot.lock().await = val;
 }
 
+/// Emit a canonical WorkerEvent on `kind="line"`. The TS-side
+/// `parseWorkerNdjson` expects exactly this shape — see
+/// [`crate::synthesis::WorkerEvent`].
+fn emit_worker_event(
+    app: &AppHandle,
+    sid: &str,
+    phase: Phase,
+    lane: Lane,
+    ev: &WorkerEvent,
+) {
+    if let Ok(payload) = serde_json::to_value(ev) {
+        emit(app, sid, phase, Some(lane), "line", Some(payload));
+    }
+}
+
+/// Emit the raw adapter envelope on `kind="worker_raw"`. The frontend
+/// uses this for diagnostics only — the lane buffer that feeds synthesis
+/// must come from `kind="line"`.
+fn emit_worker_raw<T: Serialize>(
+    app: &AppHandle,
+    sid: &str,
+    phase: Phase,
+    lane: Lane,
+    raw: &T,
+) {
+    if let Ok(payload) = serde_json::to_value(raw) {
+        emit(app, sid, phase, Some(lane), "worker_raw", Some(payload));
+    }
+}
+
+/// Pull canonical `WorkerEvent`s out of a Claude adapter event:
+/// 1. `Assistant { text }` — scan the model's text output for NDJSON.
+/// 2. `Other { raw }` — passthrough when `raw` already carries `event:`
+///    (the mock fixture path: `MockRunner` emits canonical lines as
+///    stdout, the adapter wraps them as `Other`).
+fn worker_events_from_claude(ev: &ClaudeEvent) -> Vec<WorkerEvent> {
+    match ev {
+        ClaudeEvent::Assistant { text, .. } => extract_from_text(text),
+        ClaudeEvent::Other { raw, .. } => {
+            WorkerEvent::try_passthrough(raw).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Pull canonical `WorkerEvent`s out of a Codex adapter event:
+/// 1. `ItemCompleted` with `item.text` (Codex `--json` `agent_message`
+///    items carry the model body in `item.text`).
+/// 2. `Other { raw }` — passthrough for mock fixture lines wrapped as
+///    `Other`.
+fn worker_events_from_codex(ev: &CodexEvent) -> Vec<WorkerEvent> {
+    match ev {
+        // Only `agent_message` items carry the model's text body. Tool /
+        // reasoning items can also have JSON-looking payloads in
+        // `item.text` that we must not mistake for canonical claims.
+        CodexEvent::ItemCompleted { item_type, raw, .. } => {
+            if item_type.as_deref() != Some("agent_message") {
+                return Vec::new();
+            }
+            let text = raw
+                .get("item")
+                .and_then(|i| i.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                extract_from_text(text)
+            }
+        }
+        CodexEvent::Other { raw, .. } => {
+            WorkerEvent::try_passthrough(raw).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 async fn drain_claude_events(
     app: &AppHandle,
     sid: &str,
@@ -494,14 +572,10 @@ async fn drain_claude_events(
             break;
         }
         n += 1;
-        emit(
-            app,
-            sid,
-            phase,
-            Some(lane),
-            "line",
-            Some(serde_json::json!(ev)),
-        );
+        for we in worker_events_from_claude(&ev) {
+            emit_worker_event(app, sid, phase, lane, &we);
+        }
+        emit_worker_raw(app, sid, phase, lane, &ev);
         if matches!(ev, ClaudeEvent::Exit { .. }) {
             break;
         }
@@ -523,14 +597,10 @@ async fn drain_codex_events(
             break;
         }
         n += 1;
-        emit(
-            app,
-            sid,
-            phase,
-            Some(lane),
-            "line",
-            Some(serde_json::json!(ev)),
-        );
+        for we in worker_events_from_codex(&ev) {
+            emit_worker_event(app, sid, phase, lane, &we);
+        }
+        emit_worker_raw(app, sid, phase, lane, &ev);
         if matches!(ev, CodexEvent::Exit { .. }) {
             break;
         }
@@ -622,13 +692,21 @@ async fn run_adversarial_loop(
                             text.push('\n');
                         }
                     }
-                    emit(
+                    for we in worker_events_from_codex(&ev) {
+                        emit_worker_event(
+                            &ctx.app,
+                            &ctx.sid,
+                            Phase::Adversarial,
+                            Lane::Codex,
+                            &we,
+                        );
+                    }
+                    emit_worker_raw(
                         &ctx.app,
                         &ctx.sid,
                         Phase::Adversarial,
-                        Some(Lane::Codex),
-                        "line",
-                        Some(serde_json::json!(ev)),
+                        Lane::Codex,
+                        &ev,
                     );
                     if matches!(ev, CodexEvent::Exit { .. }) {
                         break;
@@ -659,13 +737,21 @@ async fn run_adversarial_loop(
                         text.push_str(t);
                         text.push('\n');
                     }
-                    emit(
+                    for we in worker_events_from_claude(&ev) {
+                        emit_worker_event(
+                            &ctx.app,
+                            &ctx.sid,
+                            Phase::Adversarial,
+                            Lane::Claude,
+                            &we,
+                        );
+                    }
+                    emit_worker_raw(
                         &ctx.app,
                         &ctx.sid,
                         Phase::Adversarial,
-                        Some(Lane::Claude),
-                        "line",
-                        Some(serde_json::json!(ev)),
+                        Lane::Claude,
+                        &ev,
                     );
                     if matches!(ev, ClaudeEvent::Exit { .. }) {
                         break;
@@ -1047,3 +1133,119 @@ pub async fn orch_get_state(
 
 // `tauri::AppHandle::try_state` requires this trait import in scope.
 use tauri::Manager;
+
+#[cfg(test)]
+mod fix_d_tests {
+    //! FIX-D regression: the orchestrator must canonicalise worker output
+    //! before it leaves the Rust side. These tests exercise the pure
+    //! extraction helpers — the live Tauri `emit` path needs an `AppHandle`
+    //! and is exercised via dryrun integration tests.
+
+    use super::{worker_events_from_claude, worker_events_from_codex};
+    use crate::adapters::claude::ClaudeEvent;
+    use crate::adapters::codex::CodexEvent;
+    use crate::synthesis::WorkerEvent;
+    use serde_json::json;
+
+    #[test]
+    fn claude_assistant_text_with_canonical_ndjson_yields_worker_events() {
+        let raw = json!({"type":"assistant","message":{"content":[]}});
+        let text = "preamble\n\
+            {\"event\":\"start\",\"worker\":\"claude\",\"phase\":\"firstpass\"}\n\
+            {\"event\":\"claim\",\"id\":\"c1\",\"text\":\"x\",\"confidence\":\"high\"}\n\
+            {\"event\":\"end\",\"status\":\"ok\"}";
+        let ev = ClaudeEvent::Assistant {
+            text: text.into(),
+            raw,
+        };
+        let out = worker_events_from_claude(&ev);
+        assert_eq!(out.len(), 3);
+        assert!(matches!(out[0], WorkerEvent::Start { .. }));
+        assert!(matches!(out[1], WorkerEvent::Claim { .. }));
+        assert!(matches!(out[2], WorkerEvent::End { .. }));
+    }
+
+    #[test]
+    fn claude_other_with_canonical_event_passthroughs() {
+        // The mock-fixture path: MockRunner emits canonical NDJSON as
+        // stdout, the adapter wraps each line as `Other { type_:"", raw }`.
+        let raw = json!({
+            "event":"claim",
+            "id":"c1",
+            "text":"y",
+            "confidence":"med"
+        });
+        let ev = ClaudeEvent::Other {
+            type_: String::new(),
+            raw,
+        };
+        let out = worker_events_from_claude(&ev);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], WorkerEvent::Claim { .. }));
+    }
+
+    #[test]
+    fn claude_system_init_yields_no_worker_events() {
+        let ev = ClaudeEvent::SystemInit {
+            session_id: Some("s".into()),
+            raw: json!({"type":"system","subtype":"init"}),
+        };
+        assert!(worker_events_from_claude(&ev).is_empty());
+    }
+
+    #[test]
+    fn codex_item_completed_with_agent_text_extracts_canonical() {
+        // Codex `--json` `agent_message` carries the model body in
+        // `item.text`. Real CLI shape, observed via `codex exec --json`.
+        let raw = json!({
+            "type":"item.completed",
+            "item":{
+                "type":"agent_message",
+                "text":"prose then\n{\"event\":\"claim\",\"id\":\"c1\",\"text\":\"k\"}"
+            }
+        });
+        let ev = CodexEvent::ItemCompleted {
+            item_type: Some("agent_message".into()),
+            error_message: None,
+            raw,
+        };
+        let out = worker_events_from_codex(&ev);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], WorkerEvent::Claim { .. }));
+    }
+
+    #[test]
+    fn codex_non_agent_message_item_does_not_extract() {
+        // Tool / reasoning items can carry JSON-looking payloads in
+        // `item.text`; the drain must not mistake them for canonical claims.
+        let raw = json!({
+            "type":"item.completed",
+            "item":{
+                "type":"command_execution",
+                "text":"{\"event\":\"claim\",\"id\":\"x\",\"text\":\"masquerade\"}"
+            }
+        });
+        let ev = CodexEvent::ItemCompleted {
+            item_type: Some("command_execution".into()),
+            error_message: None,
+            raw,
+        };
+        assert!(worker_events_from_codex(&ev).is_empty());
+    }
+
+    #[test]
+    fn codex_other_with_canonical_event_passthroughs() {
+        let raw = json!({
+            "event":"open_question",
+            "id":"q1",
+            "text":"why"
+        });
+        let ev = CodexEvent::Other {
+            type_: String::new(),
+            raw,
+        };
+        let out = worker_events_from_codex(&ev);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], WorkerEvent::OpenQuestion { .. }));
+    }
+}

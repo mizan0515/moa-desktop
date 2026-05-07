@@ -199,6 +199,20 @@ describe("parseWorkerNdjson", () => {
     const out = parseWorkerNdjson(text, "claude");
     expect(out.claims).toHaveLength(1);
   });
+
+  // FIX-D regression: pre-fix, the orchestrator drained Serde-tagged
+  // adapter envelopes (`{kind:"assistant",...}`) into the lane buffer.
+  // The parser must not mistake those for canonical worker events.
+  it("yields nothing when fed a Serde adapter envelope", () => {
+    const text = [
+      JSON.stringify({ kind: "system_init", session_id: "abc" }),
+      JSON.stringify({ kind: "assistant", text: "hi", raw: {} }),
+      JSON.stringify({ kind: "result", is_error: false, num_turns: 1 }),
+    ].join("\n");
+    const out = parseWorkerNdjson(text, "claude");
+    expect(out.claims).toHaveLength(0);
+    expect(out.openQuestions).toHaveLength(0);
+  });
 });
 
 describe("synthesize — determinism", () => {

@@ -37,6 +37,7 @@ export type EventKind =
   | "phase_start"
   | "phase_end"
   | "line"
+  | "worker_raw"
   | "state"
   | "escalation"
   | "awaiting_confirm"
@@ -149,12 +150,20 @@ async function onEvent(ev: OrchEvent): Promise<void> {
     }
     case "line": {
       const lane = (ev.lane ?? "system") as Lane;
-      // Worker output — store as raw JSON line so we can feed the TS T3
-      // parser (`parseWorkerNdjson`) later. Mock-mode lines arrive as
-      // already-parsed JSON, which we re-stringify for uniformity.
-      const text =
-        typeof ev.payload === "string" ? ev.payload : JSON.stringify(ev.payload ?? {});
-      s.lanes[lane].push(text);
+      // FIX-D: only canonical WorkerEvent payloads (see
+      // `src/lib/synthesis/types.ts` — `event: start|claim|open_question|end`)
+      // feed the lane buffer. The Rust orchestrator emits raw adapter
+      // envelopes under `kind="worker_raw"` instead. Pre-FIX-D this branch
+      // accepted anything stringifiable, which silently buried Serde-tagged
+      // adapter envelopes (`{kind:"assistant",...}`) in the buffer; the
+      // synthesis parser then dropped them all and returned an empty result.
+      if (typeof ev.payload === "string") {
+        // Defensive: dryrun and legacy mock paths emit a raw NDJSON string.
+        // Trust the producer to keep the canonical shape.
+        s.lanes[lane].push(ev.payload);
+      } else if (isCanonicalWorkerEventPayload(ev.payload)) {
+        s.lanes[lane].push(JSON.stringify(ev.payload));
+      }
       break;
     }
     case "escalation": {
@@ -214,6 +223,21 @@ function parseWorkerLanes(lines: string[], who: WorkerName): WorkerOutput {
   // Concatenate as ND-JSON so the existing parser does the work. Best-effort
   // — invalid lines are skipped by `parseWorkerNdjson`.
   return parseWorkerNdjson(lines.join("\n"), who);
+}
+
+/// Canonical `WorkerEvent` discriminator — must match
+/// `src/lib/synthesis/types.ts` and `src-tauri/src/synthesis/mod.rs`.
+const CANONICAL_WORKER_EVENTS = ["start", "claim", "open_question", "end"] as const;
+
+/// Returns true when the payload is shaped like a `WorkerEvent` (top-level
+/// `event` discriminator with one of the canonical values). Used to gate
+/// the lane buffer so raw adapter envelopes (`kind="assistant"`, etc.) do
+/// not poison the synthesis input.
+export function isCanonicalWorkerEventPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const tag = (payload as { event?: unknown }).event;
+  if (typeof tag !== "string") return false;
+  return (CANONICAL_WORKER_EVENTS as readonly string[]).includes(tag);
 }
 
 // ─── public API ────────────────────────────────────────────────────────────
