@@ -26,6 +26,7 @@
 - 역할: parent — Worker 두 개를 spawn, synthesis, adversarial, lock manage, mutation gate, verification
 - Flow A/B/C/D 자동 판단 (DESIGN.md "Flows" 절)
 - 사용자 개입 2 곳: 작업 입력 + 최종 patch apply confirm
+- **PrimaryRole** (T13 L1, settings.primaryRole): "claude" | "codex". Codex 선택 시 synthesizer / default reviewer / Flow-C mutation owner 모두 Codex. lock state machine 무영향. destructive-network 슬래시 (예: `/메인동기화`) 는 PrimaryRole 무관 단계별 confirm.
 
 ## 모든 Agent 의 6 항목 의무 (프롬프트 빌드 시)
 1. Success criteria (검증 가능)
