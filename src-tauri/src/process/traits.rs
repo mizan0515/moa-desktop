@@ -43,7 +43,16 @@ pub enum StdinPolicy {
 pub struct ProcessSpec {
     pub argv: Vec<String>,
     pub cwd: PathBuf,
+    /// Plugin-specific env. Applied AFTER `env_inherit`, so adapter-defined
+    /// keys win over inherited ones.
     pub env: HashMap<String, String>,
+    /// Whitelist of parent-process env vars to inherit into the child after
+    /// the runner calls `env_clear()`. On Windows the CLI workers (Claude /
+    /// Codex) need USERPROFILE / APPDATA / PATH / PATHEXT / SystemRoot etc.
+    /// to find auth, npm shims, and PowerShell — `env_clear` without a
+    /// re-inherit step makes them either fail to spawn or silently lose
+    /// their config. Caller may extend or replace via `with_env_inherit`.
+    pub env_inherit: Vec<String>,
     pub stdin: StdinPolicy,
     /// Bounded line buffer between supervisor and consumer. Default 1024.
     /// When the consumer falls behind, the readers backpressure naturally
@@ -64,6 +73,7 @@ impl ProcessSpec {
             argv,
             cwd,
             env: HashMap::new(),
+            env_inherit: default_inherit_keys(),
             stdin: StdinPolicy::Null,
             line_buf: 1024,
             max_line_bytes: 1024 * 1024,
@@ -76,10 +86,53 @@ impl ProcessSpec {
         self
     }
 
+    /// Replace the inherit whitelist. Pass an empty Vec for the previous
+    /// `env_clear`-only behavior (typically only useful in tests that pin
+    /// the child env exactly).
+    pub fn with_env_inherit(mut self, keys: Vec<String>) -> Self {
+        self.env_inherit = keys;
+        self
+    }
+
     pub fn with_stdin(mut self, stdin: StdinPolicy) -> Self {
         self.stdin = stdin;
         self
     }
+}
+
+/// OS-specific default whitelist. On Windows the CLI workers refuse to
+/// run without these (auth lookup, npm shim resolution, PowerShell exec).
+/// On Unix we keep it minimal — most tools only need PATH / HOME / locale.
+///
+/// Trust note: `ComSpec` is forwarded as-is. The launcher chain is part
+/// of the trusted environment — if the parent shell pointed `ComSpec`
+/// at a wrapper, the child sees that wrapper. Callers that need a
+/// hardened shell can override via `with_env` or by stripping `ComSpec`
+/// from the inherit list with `with_env_inherit`.
+pub fn default_inherit_keys() -> Vec<String> {
+    let raw: &[&str] = if cfg!(windows) {
+        &[
+            "PATH",
+            "PATHEXT",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "SystemRoot",
+            "SYSTEMDRIVE",
+            "TEMP",
+            "TMP",
+            "ComSpec",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "USERNAME",
+            "PROGRAMDATA",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+        ]
+    } else {
+        &["PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SHELL"]
+    };
+    raw.iter().map(|s| s.to_string()).collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

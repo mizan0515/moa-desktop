@@ -41,6 +41,17 @@ impl ProcessRunner for TokioProcessRunner {
         cmd.args(&spec.argv[1..]);
         cmd.current_dir(&spec.cwd);
         cmd.env_clear();
+        // Re-inherit OS-essential vars from the parent (Windows: USERPROFILE,
+        // APPDATA, PATH, PATHEXT, SystemRoot, ...) BEFORE applying spec.env.
+        // Without this the worker CLIs spawn-fail or lose auth/config; see
+        // adapters/codex.rs CodexConfig.env contract and the Windows CLI
+        // smoke notes.
+        for key in &spec.env_inherit {
+            if let Some(val) = std::env::var_os(key) {
+                cmd.env(key, val);
+            }
+        }
+        // Plugin-specific env wins over inherited values.
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }

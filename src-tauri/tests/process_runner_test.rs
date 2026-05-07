@@ -332,3 +332,83 @@ fn windows_descendant_count(pid: u32) -> usize {
         .filter(|l| !l.trim().is_empty())
         .count()
 }
+
+#[tokio::test]
+async fn parent_env_inherits_via_default_allowlist() {
+    // Regression: pre-fix the runner called env_clear() and only re-injected
+    // spec.env, stripping USERPROFILE / APPDATA / PATH / PATHEXT etc. from
+    // the child. Worker CLIs depend on these; child must see them after fix.
+    let runner = TokioProcessRunner::new();
+
+    let spec = ProcessSpec::new(
+        cmd_argv(
+            "echo USERPROFILE=%USERPROFILE% && echo APPDATA=%APPDATA% && \
+             echo PATH_LEN=%PATH:~0,1% && echo PATHEXT=%PATHEXT%",
+        ),
+        cwd(),
+    );
+    // Deliberately pass an EMPTY spec.env — the inherit allowlist alone must
+    // be enough to resolve cmd.exe and forward USERPROFILE/APPDATA/PATH.
+
+    let ProcessHandle { control, mut lines } = runner.spawn(spec).await.expect("spawn");
+
+    let mut joined = String::new();
+    while let Some(l) = lines.recv().await {
+        if l.stream == Stream::Stdout {
+            joined.push_str(&l.line);
+            joined.push('\n');
+        }
+    }
+    let exit = control.wait(Some(Duration::from_secs(10))).await.expect("exit");
+    assert!(exit.is_clean(), "child must exit cleanly: {exit:?}");
+
+    // Parent USERPROFILE / APPDATA must be visible to the child. Compare
+    // against the parent's view — if cmd.exe resolved at all, the inherit
+    // worked. We also assert PATHEXT is non-empty so the child can resolve
+    // npm shims itself.
+    let parent_userprofile = std::env::var("USERPROFILE").expect("parent has USERPROFILE");
+    assert!(
+        joined.contains(&format!("USERPROFILE={parent_userprofile}")),
+        "child should see parent USERPROFILE; got:\n{joined}"
+    );
+    assert!(
+        !joined.contains("APPDATA=%APPDATA%"),
+        "APPDATA must be expanded (i.e. inherited); got:\n{joined}"
+    );
+    assert!(
+        joined.contains("PATHEXT=") && !joined.contains("PATHEXT=%PATHEXT%"),
+        "PATHEXT must be inherited so the child can locate shims; got:\n{joined}"
+    );
+}
+
+#[tokio::test]
+async fn empty_env_inherit_disables_passthrough() {
+    // with_env_inherit(vec![]) restores the strict env_clear behavior.
+    // We can't easily spawn cmd.exe without PATH, so instead we hand it
+    // PATH explicitly via spec.env and assert that USERPROFILE — which we
+    // did NOT pass — comes back unexpanded.
+    let runner = TokioProcessRunner::new();
+    let mut env = HashMap::new();
+    env.insert("PATH".into(), std::env::var("PATH").unwrap());
+    env.insert("SystemRoot".into(), std::env::var("SystemRoot").unwrap());
+    env.insert("ComSpec".into(), std::env::var("ComSpec").unwrap());
+
+    let spec = ProcessSpec::new(cmd_argv("echo USERPROFILE=%USERPROFILE%"), cwd())
+        .with_env(env)
+        .with_env_inherit(vec![]);
+
+    let ProcessHandle { control, mut lines } = runner.spawn(spec).await.expect("spawn");
+    let mut joined = String::new();
+    while let Some(l) = lines.recv().await {
+        if l.stream == Stream::Stdout {
+            joined.push_str(&l.line);
+            joined.push('\n');
+        }
+    }
+    let _ = control.wait(Some(Duration::from_secs(10))).await;
+    // %USERPROFILE% stays literal because the var isn't set in the child.
+    assert!(
+        joined.contains("USERPROFILE=%USERPROFILE%"),
+        "with empty inherit list, USERPROFILE must NOT leak; got:\n{joined}"
+    );
+}

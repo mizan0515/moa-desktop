@@ -397,3 +397,57 @@ async fn item_completed_with_warning_payload_does_not_mark_failed() {
         other => panic!("last not Exit: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn firstpass_spec_carries_env_inherit_allowlist() {
+    // Regression: see CodexConfig.env contract — the runner must inherit
+    // USERPROFILE / APPDATA / PATH / PATHEXT / SystemRoot etc. so codex.exe
+    // can find auth.json + config.toml + npm shims on Windows.
+    let script = vec![r#"{"type":"thread.started","thread_id":"thr-env"}"#];
+    let runner = Arc::new(ScriptRunner::new(script));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let _ = adapter
+        .firstpass(FirstPassRequest {
+            task: "t".into(),
+            files: vec![],
+            cwd: PathBuf::from("C:/repo"),
+        })
+        .await
+        .expect("spawn");
+
+    let cap = runner.captured();
+    let spec = cap.spec.expect("spec captured");
+    let inherited: std::collections::HashSet<&str> =
+        spec.env_inherit.iter().map(String::as_str).collect();
+
+    #[cfg(windows)]
+    {
+        for key in [
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PATH",
+            "PATHEXT",
+            "SystemRoot",
+            "TEMP",
+        ] {
+            assert!(
+                inherited.contains(key),
+                "env_inherit must include {key}; got {inherited:?}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    {
+        for key in ["PATH", "HOME"] {
+            assert!(
+                inherited.contains(key),
+                "env_inherit must include {key}; got {inherited:?}"
+            );
+        }
+    }
+
+    // Plugin-specific env still wins (CODEX_HOME present from cfg()).
+    assert!(spec.env.contains_key("CODEX_HOME"));
+}
