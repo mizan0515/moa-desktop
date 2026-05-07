@@ -7,10 +7,10 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 
 ### F1. `codex exec` 명령 템플릿 — 확정 (2026-05-06 사용자 검증 완료, codex-cli 0.128.0)
 - ❌ **불가**: `codex exec --reasoning-effort high ...` — `error: unexpected argument '--reasoning-effort' found`
-- ✅ **확정 (read-only first-pass)**: `codex exec --ephemeral -c model_reasoning_effort='high' --sandbox read-only --cd <repo> <prompt>`
-- ✅ **확정 (mutation owner, Windows S2 #5)**: `codex exec --ephemeral -c model_reasoning_effort='high' --dangerously-bypass-approvals-and-sandbox --cd <worktree> <prompt>` (isolated worktree 안. `--sandbox workspace-write` 는 Windows 에서 broken — `src-tauri/src/adapters/codex.rs::mutation_argv` 가 source of truth)
-- ✅ JSON streaming: `--json` 추가 (라인 단위 emit)
-- ✅ Web search 사용: config.toml 에서 `[tools.web_search] enabled = true` 또는 `-c tools.web_search=true`
+- ✅ **확정 (read-only first-pass)**: `codex exec --ephemeral -c model_reasoning_effort='high' -c web_search="live" --sandbox read-only --json --cd <repo> <prompt>` (`src-tauri/src/adapters/codex.rs::firstpass_argv` 가 source of truth)
+- ✅ **확정 (mutation owner, Windows S2 #5)**: `codex exec --ephemeral -c model_reasoning_effort='high' -c web_search="live" --dangerously-bypass-approvals-and-sandbox --json --cd <worktree> <prompt>` (isolated worktree 안. `--sandbox workspace-write` 는 Windows 에서 broken — `src-tauri/src/adapters/codex.rs::mutation_argv` 가 source of truth)
+- ✅ JSON streaming: `--json` 사용 (라인 단위 emit)
+- ✅ Web search 사용: 현재 adapter source of truth 는 CLI config `-c web_search="live"` (`src-tauri/src/adapters/codex.rs::firstpass_argv`). 구형 `-c tools.web_search=true` 문구로 되돌리지 않는다.
 - 비차단 경고 (T0 에서 기록만, 차단 X): `chatgpt.com` 플러그인/analytics 403, PowerShell shell snapshot 미지원, MCP client `program not found`
 
 ### F2. 명령 빌드는 argv array, shell string 금지
@@ -21,7 +21,8 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 - Claude Worker: `--allowedTools` allowlist + `--disallowedTools` deny list (Edit, Write, NotebookEdit 명시 + `mcp__*` wildcard 시도)
 - Codex Worker: `-s read-only` (CLI sandbox flag)
 - Plugin/MCP env 분리: Worker spawn 시 `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CODEX_HOME` 별도 prof
-- Output scanner = warning level only (security 가드 X)
+- WorkerCommandGuard/SpawnGuard = primary security guard: worker-source peer AI executable/argv/shell execution is blocked before spawn/tool execution.
+- Output scanner = blocking second defense for worker stdout/slash/final UI, not warning-only.
 
 ### F4. Mutation = isolated worktree/patch flow
 - Worker 가 직접 source 수정 X
@@ -99,27 +100,27 @@ Status: Ready for ticket dispatch after critical-fix confirmation
 
 ### "양측 모두 web search · deep thinking · file edit" 보장
 - Claude Worker: read-only 모드 — `--allowedTools "Read" "WebSearch" "WebFetch" "Bash(git:*)" "Bash(rg:*)"`. Mutation 모드 — `+ "Edit" "Write"`. Deep thinking — prompt 에 "think hard" 또는 `MAX_THINKING_TOKENS=10000` env.
-- Codex Worker: read-only — `--sandbox read-only -c model_reasoning_effort='high' -c tools.web_search=true`. Mutation — `--dangerously-bypass-approvals-and-sandbox` (isolated worktree 안, Windows S2 #5) + 동일 reasoning + web_search.
+- Codex Worker: read-only — `--sandbox read-only -c model_reasoning_effort="high" -c web_search="live"`. Mutation — `--dangerously-bypass-approvals-and-sandbox` (isolated worktree 안, Windows S2 #5) + 동일 reasoning + web_search.
 
 ## 0.6 v1.5 Prequel — Policy & Lifecycle EPIC (T13, 2026-05-07 사용자 비전 검증 결과)
 
-T10 진입 전 필수 보강. 사용자 결정:
+T10 진입 전 필수 보강. GitHub EPIC: #35 (https://github.com/mizan0515/moa-desktop/issues/35). 사용자 결정:
 - **Q1·B**: `settings.primaryRole = "claude" | "codex"`. Codex 선택 시 synthesizer / default reviewer / Flow-C mutation owner 까지 Codex 로 스왑. lock state machine 은 이미 대칭 (`lock/manager.rs:45-47`) — 변경 X.
 - **Q2·단계별 confirm**: `/메인동기화` 류 destructive-network 명령은 4-5 step 사용자 확인. **자동화-2-개입 원칙 (§ 0.5)** 의 명시적 예외 — destructive scope 가 큰 명령은 step gate 우선.
 - **Q3·앱 backlog SOT**: 앱 내부 backlog 가 source of truth, `~/.claude/projects/<repo>/memory/` 는 단방향 mirror (앱 → 글로벌). 사용자가 다른 프로젝트에서 글로벌 read 가능.
-- **추가요구**: 병행티켓 흐름 (T10/T11/T12) 의 PR 생성/머지 단계마다 **Codex adversarial-review 의무** 를 prompt 에 박는다. PrimaryRole=Codex 시 Claude review 가 추가됨 (대칭 운영).
-- **글로벌 sync**: 글로벌 **15 파일** (Hot 룰 6 = `CLAUDE/RTK/KARPATHY/TOKEN-GUARD/TICKET-CLOSE/CODEX-MCP` + On-demand 스킬 2 = `skills/{codex-mcp-runtime,token-guard-internals}/SKILL.md` + 한국어 단축명령 7) 변경분은 hash drift detect → 사용자 명시 import. 자동 적용 X. PolicyPack 은 `source_manifest[]` + kind discriminator (HotRule / OnDemandSkill / TicketCloseRule / RuntimeHealthCheck) 로 표현 — 글로벌이 또 분리되어도 schema 변경 불요.
+- **추가요구**: 병행티켓 흐름 (T10/T11/T12) 의 PR 생성/머지/통합/main 적용 단계마다 **lead/orchestrator-owned review gate** 를 둔다. 이 gate 는 **항상 `CodexAdversarialXHigh` review profile/prompt** 를 포함한다. MoA Desktop 앱 안에서는 source=orchestrator 의 review profile 이 실행하고, Codex Desktop 수동 개발 흐름에서는 사용자가 명시한 lead PowerShell `codex exec --ephemeral --sandbox read-only ... --output-last-message <repo>/.moa-desktop/reviews/<stamp>.md` 별도 review 가 같은 gate 증거가 될 수 있다. 앱 profile/PowerShell prompt 는 `/codex:adversarial-review --effort xhigh` 와 동등한 의도/강도이며 `reasoning_effort=xhigh`, prompt template version/hash, model/profile id, command/source adapter, source output path 를 `ReviewRunRecord` 에 남긴다. `--dangerously-bypass-approvals-and-sandbox` 는 mutation-in-worktree 전용이고 review gate 성공 증거로 쓰지 않는다. PrimaryRole=Codex 인 경우 Claude review 는 추가 대칭 검토로 붙일 수 있지만 Codex review 를 대체하지 않는다. gate 시점은 `pr_create` 전 local diff, `pr_merge` 전 PR diff, `integrate_merge` 전 통합 diff, `main_apply` 전 최종 diff 로 기록한다. 워커 prompt 에 `/codex:*`, `claude -p`, `codex exec` 직접 호출을 박는 nested peer-call 방식은 금지.
+- **글로벌 sync**: Claude-side 글로벌 **15 파일** (Hot 룰 6 = `CLAUDE/RTK/KARPATHY/TOKEN-GUARD/TICKET-CLOSE/CODEX-MCP` + On-demand 스킬 2 = `skills/{codex-mcp-runtime,token-guard-internals}/SKILL.md` + 한국어 단축명령 7) + Codex Desktop overlay `~/.codex/skills/병행티켓/SKILL.md`(존재 시) 변경분은 hash drift detect → 사용자 명시 import. 자동 적용 X. 추가로 `~/.claude/settings.json` 은 raw copy 가 아니라 safe subset 을 `RuntimeProfile` 로 import. PolicyPack 은 `source_manifest[]` + kind discriminator (HotRule / OnDemandSkill / TicketCloseRule / RuntimeHealthCheck / RuntimeSettings / CodexDesktopOverlay) 로 표현 — 글로벌이 또 분리되어도 schema 변경 불요. 글로벌 슬래시/스킬은 executable truth 가 아니라 **policy resolver 입력**이며, 현재 글로벌 명령이 앱 정책과 충돌하면 T13 L4 의 변환/override 규칙이 우선한다. Claude-side `/병행티켓` 과 Codex overlay 가 review gate vocabulary 또는 `command_source_adapter` 에서 충돌하면 fail closed 로 사용자 import/transform confirm 을 요구한다.
 
 EPIC 구조 (단일 ticket T13, 5 phase):
 - **L1** PrimaryRole + ExecutionPolicy (orchestrator hardcode 제거)
-- **L2** SafetyPolicy + Role-aware Output Scanner (DESIGN.md:90-92 코드화)
+- **L2** SafetyPolicy + WorkerCommandGuard + Role-aware Output Scanner (DESIGN.md:90-98 코드화)
 - **L3** Policy Pack (executable schema, markdown copy 아님)
 - **L4** Privileged Slash Command Subsystem (UI dispatcher, 워커 슬래시는 disabled 유지)
 - **L5** Resume Packet & Session Lifecycle (`.claude-handoff.md` 대체, T11 multi-lane 토대)
 
 상세: [TICKETS/T13-policy-lifecycle-epic.md](TICKETS/T13-policy-lifecycle-epic.md).
 
-T10/T11/T12 는 본 EPIC 통과 후 Phase 6 원안대로 진행. 단 T10/T11/T12 본문에 "PR 생성/머지 단계 Codex review 의무" 1 줄 amend 됨 (본 결정 반영).
+T10/T11/T12 는 본 EPIC 통과 후 Phase 6 원안대로 진행. 단 T10/T11/T12 본문에는 "PR 생성 전/머지 전/통합 전/main 적용 전 Codex adversarial review gate 의무" 를 **lead/orchestrator-owned gate** 로 명시한다. 앱 실행 시에는 orchestrator source, Codex Desktop 수동 개발 시에는 lead PowerShell 별도 review 로 수행할 수 있다. worker prompt 는 review gate 통과 전 PR 생성/merge/main apply 금지만 안내하고, 워커가 peer AI 를 직접 호출하는 문구는 포함하지 않는다.
 
 ## 1. Implementation phases (value-incremental, 5-7주 1인)
 
@@ -173,6 +174,14 @@ F5 의 S1-S8 검증. 통과 못하면 Phase 1 진입 금지.
 
 **Phase 6 진입 전 체크**: T1 가 상단 프로젝트 탭 바 + tabRegistry 패턴을 포함했는가, T4 lock 이 project-id 키로 분리됐는가, T9 telemetry 가 project-scoped 인가. 셋 중 하나라도 누락이면 backtrack 비용 큼 — **T1/T4/T9 ticket 본문을 본 결정에 맞춰 amend 필요** (다음 단계).
 
+### Phase 7 (v1.6) — Conversational Mode (T14, pending)
+**비전 확장 단계**: 자동화 mode 외에 Claude Code Desktop + Codex MCP 처럼 사용자가 conversational peer workflow 를 직접 운전하는 mode.
+- T14: `settings.interactionMode = "automated" | "conversational"`.
+- peer dispatch 는 UI/orchestrator-mediated 만 허용. worker 가 peer AI 를 직접 호출하는 nested peer-call 은 금지.
+- thinking/reasoning summary 를 `thinking_chunk` 이벤트로 분리해 expand/collapse 표시.
+- 현재 adapter 가 stdin 을 닫는 one-shot 모델이면 same-stream redirect/`<ASK_USER>` 답변 주입을 주장하지 않는다. 우선 spawn-new-turn + ResumePacket state carryover 로 conversational turn 을 구현하고, interactive/resumable adapter 가 생긴 뒤 same-stream redirect 를 확장한다.
+- 상세: [TICKETS/T14-conversational-mode.md](TICKETS/T14-conversational-mode.md), GitHub #29.
+
 ## 2. Ticket dependency graph (value-incremental)
 
 ```
@@ -194,6 +203,18 @@ T0 (spike) ── 통과 후 Phase 1 진입
                     └─ T9 + Phase 4 hardening
                           │
                           └─ Phase 5 verify
+                                │
+                                ├─ T20-GATE (#20 AppHandle integration test prerequisite for next orchestrator-touching ticket)
+                                │     │
+                                │     └─ T13 (Policy & Lifecycle EPIC)
+                                │            │
+                                │            └─ T10 (Ticket Decomposer)
+                                │                  │
+                                │                  └─ T11 (Parallel Runner)
+                                │                        │
+                                │                        └─ T12 (Merge Integrator)
+                                │
+                                └─ T14 (Conversational Mode, after T13; same-stream features only after interactive adapter)
 ```
 
 ## 3. Final ticket list (paste-ready 다음 섹션에서 prompt 화)
@@ -212,9 +233,12 @@ T0 (spike) ── 통과 후 Phase 1 진입
 | T4 | 3 | `src-tauri/src/safety/*`, `src-tauri/src/git/worktree.rs`, `src-tauri/src/lock/*`, `src-tauri/src/journal/*` | T2 | — (T2 만) |
 | T7-full | 3 | `src-tauri/src/orchestrator/*` (dryRun 제외), `src/lib/orchestrator/stateMachine.ts` | T2, T3, T4, T5a, T5b | T2, T3, T4, T5a, T5b |
 | T9 | 4 | `src-tauri/src/telemetry/*`, `src/components/CostMeter.tsx`, `src-tauri/src/cancel/*` | T2 | T2 |
-| **T10** | 6 | `src-tauri/src/decomposer/*`, `prompts/decomposer.txt`, `src/components/TicketBoard.tsx` | T7-full, T5a, T5b | T7-full |
-| **T11** | 6 | `src-tauri/src/parallel/*`, `src-tauri/src/parallel/worktree_pool.rs`, `src/components/ParallelLanes.tsx` | T4 (worktree.rs API), T7-full, T9 | T4, T7-full, T9 |
-| **T12** | 6 | `src-tauri/src/integrator/*`, `src/components/IntegratePanel.tsx` | T4 (patch apply), T11 | T11 |
+| **T20-GATE** | 5.5 | AppHandle 통합 테스트 보강 (#20) | orchestrator/Tauri test harness | T7-full |
+| **T13** | 5.5 | `src-tauri/src/{policy,safety,commands,lifecycle}/*`, settings/policy UI hooks | 글로벌 15 파일 + settings safe subset, T7-full | T20-GATE, T7-full |
+| **T10** | 6 | `src-tauri/src/decomposer/*`, `prompts/decomposer.txt`, `src/components/TicketBoard.tsx` | T7-full, T5a, T5b, T13 review/policy schema | T13 |
+| **T11** | 6 | `src-tauri/src/parallel/*`, `src-tauri/src/parallel/worktree_pool.rs`, `src/components/ParallelLanes.tsx` | T4 (worktree.rs API), T7-full, T9, T10 schema | T4, T7-full, T9, T10 |
+| **T12** | 6 | `src-tauri/src/integrator/*`, `src/components/IntegratePanel.tsx` | T4 (patch apply), T10 merge order, T11 lane results, T13 review gate | T11 |
+| **T14** | 7 | `src-tauri/src/conversation/*`, `src/components/ConversationPanel.tsx`, `src/components/ThinkingBlock.tsx` | T13 commands/lifecycle/scanner, adapters | T13 |
 
 **병렬 가능한 첫 스프린트** (T0 통과 후): T1, T8, T2 (3 worker 동시 가능). T6, T7-thin 는 T8 schema 합의 후.
 

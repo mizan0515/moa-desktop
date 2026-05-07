@@ -16,7 +16,7 @@
 
 ### Codex Worker
 - 역할: MoA Desktop 의 sibling worker (orchestrator 가 아님)
-- 호출 방식: `codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true --sandbox <mode> --json --cd <cwd> <prompt>`
+- 호출 방식: `codex exec --ephemeral -c model_reasoning_effort='high' -c web_search="live" --sandbox <mode> --json --cd <cwd> <prompt>` (`src-tauri/src/adapters/codex.rs::firstpass_argv` 가 source of truth)
 - read-only first-pass: `--sandbox read-only`
 - mutation owner: `--dangerously-bypass-approvals-and-sandbox` inside isolated worktree (Windows S2 finding #5: `workspace-write` is broken; bypass-in-worktree 가 source of truth — `src-tauri/src/adapters/codex.rs::mutation_argv`). 단 lock owner=codex 일 때만.
 - 금지: `claude` 직접 호출, Claude MCP, `claude_code_peer`, `TeamCreate`, `Agent`

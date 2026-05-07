@@ -4,7 +4,8 @@
 //! `codex exec --json` lines and assert argv shape, prompt routing
 //! (positional, NOT stdin), and event sequence.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -285,11 +286,13 @@ async fn mutation_uses_worktree_cwd_and_dangerous_bypass_argv() {
     let runner = Arc::new(ScriptRunner::new(script));
     let adapter = CodexAdapter::new(runner.clone(), cfg());
 
-    let wt_path = PathBuf::from("C:/temp/moa-desktop-wt-test");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (repo_root, wt_path) = create_repo_with_registered_moa_worktree(tmp.path(), "session-1");
 
     let mut stream = adapter
         .mutation(MutationRequest {
             task: "apply patch".into(),
+            repo_root: repo_root.clone(),
             worktree_path: wt_path.clone(),
         })
         .await
@@ -317,6 +320,405 @@ async fn mutation_uses_worktree_cwd_and_dangerous_bypass_argv() {
     assert!(prompt.starts_with("GUARD-TEXT"));
     assert!(prompt.contains("MUT task=apply patch"));
     assert!(prompt.contains(&wt_path.to_string_lossy().into_owned()));
+}
+
+#[tokio::test]
+async fn mutation_rejects_unregistered_existing_moa_worktree_dir() {
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_root = create_git_repo(tmp.path(), "repo");
+    let wt_path = repo_root
+        .join(".moa-desktop")
+        .join("worktrees")
+        .join("not-registered");
+    std::fs::create_dir_all(&wt_path).expect("fake worktree dir");
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("unregistered directory must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject before spawning Codex bypass mode"
+    );
+}
+
+#[tokio::test]
+async fn mutation_rejects_unregistered_git_repo_under_moa_worktree_parent() {
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_root = create_git_repo(tmp.path(), "repo");
+    let worktrees_parent = repo_root.join(".moa-desktop").join("worktrees");
+    std::fs::create_dir_all(&worktrees_parent).expect("worktree parent");
+    let wt_path = create_git_repo(&worktrees_parent, "not-registered");
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("unregistered nested git repository must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        err.message.contains("not registered in git worktree list"),
+        "expected registration-branch denial, got: {}",
+        err.message
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject before spawning Codex bypass mode"
+    );
+}
+
+#[tokio::test]
+async fn mutation_rejects_registered_worktree_from_different_repo_root() {
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (_repo_a, wt_path) = create_repo_with_registered_moa_worktree(tmp.path(), "session-1");
+    let repo_b = create_git_repo(tmp.path(), "repo-b");
+    std::fs::create_dir_all(repo_b.join(".moa-desktop").join("worktrees"))
+        .expect("repo-b worktree parent");
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root: repo_b,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("worktree from another repo must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject before spawning Codex bypass mode"
+    );
+}
+
+#[tokio::test]
+async fn mutation_rejects_traversal_path_before_spawn() {
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_root = create_git_repo(tmp.path(), "repo");
+    let wt_path = repo_root
+        .join(".moa-desktop")
+        .join("worktrees")
+        .join("..")
+        .join("session-1");
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("traversal worktree path must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject traversal before spawning Codex bypass mode"
+    );
+}
+
+#[tokio::test]
+async fn mutation_rejects_repo_root_that_is_git_subdirectory() {
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (repo_root, wt_path) = create_repo_with_registered_moa_worktree(tmp.path(), "session-1");
+    let subdir = repo_root.join("nested");
+    std::fs::create_dir_all(&subdir).expect("repo subdir");
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root: subdir,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("repo_root subdirectory must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject subdirectory repo_root before spawning Codex bypass mode"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn mutation_rejects_symlinked_worktree_parent_escape() {
+    use std::os::unix::fs::symlink;
+
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_root = create_git_repo(tmp.path(), "repo");
+    let outside = tmp.path().join("outside-worktrees");
+    std::fs::create_dir_all(&outside).expect("outside dir");
+    std::fs::create_dir_all(repo_root.join(".moa-desktop")).expect("moa dir");
+    symlink(&outside, repo_root.join(".moa-desktop").join("worktrees")).expect("symlink");
+    let wt_path = repo_root
+        .join(".moa-desktop")
+        .join("worktrees")
+        .join("session-escape");
+    run_git(
+        &repo_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "test-session-escape",
+            path_str(&wt_path),
+        ],
+    );
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("symlinked worktree parent escape must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject canonical parent escape before spawning Codex bypass mode"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn mutation_rejects_junctioned_worktree_parent_escape() {
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_root = create_git_repo(tmp.path(), "repo");
+    let outside = tmp.path().join("outside-worktrees");
+    std::fs::create_dir_all(&outside).expect("outside dir");
+    std::fs::create_dir_all(repo_root.join(".moa-desktop")).expect("moa dir");
+    create_junction(&outside, &repo_root.join(".moa-desktop").join("worktrees"));
+    let wt_path = repo_root
+        .join(".moa-desktop")
+        .join("worktrees")
+        .join("session-escape");
+    run_git(
+        &repo_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "test-session-escape",
+            path_str(&wt_path),
+        ],
+    );
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("junctioned worktree parent escape must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        err.message.contains("escapes the git top-level")
+            || err.message.contains("not a direct child")
+            || err.message.contains("reparse/junction alias"),
+        "unexpected error: {}",
+        err.message
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject canonical parent escape before spawning Codex bypass mode"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn mutation_rejects_in_repo_junctioned_worktree_parent_alias() {
+    let runner = Arc::new(ScriptRunner::new(vec![r#"{"type":"turn.completed"}"#]));
+    let adapter = CodexAdapter::new(runner.clone(), cfg());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_root = create_git_repo(tmp.path(), "repo");
+    let alias = repo_root.join("src").join(".worktrees");
+    std::fs::create_dir_all(&alias).expect("in-repo alias target");
+    std::fs::create_dir_all(repo_root.join(".moa-desktop")).expect("moa dir");
+    create_junction(&alias, &repo_root.join(".moa-desktop").join("worktrees"));
+    let wt_path = repo_root
+        .join(".moa-desktop")
+        .join("worktrees")
+        .join("session-alias");
+
+    let result = adapter
+        .mutation(MutationRequest {
+            task: "apply patch".into(),
+            repo_root,
+            worktree_path: wt_path,
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("in-repo junction alias must be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.kind,
+        moa_desktop_lib::process::ProcessErrorKind::PermissionDenied
+    );
+    assert!(
+        err.message.contains("reparse/junction alias"),
+        "unexpected error: {}",
+        err.message
+    );
+    assert!(
+        runner.captured().spec.is_none(),
+        "guard must reject alias before spawning Codex bypass mode"
+    );
+}
+
+fn create_repo_with_registered_moa_worktree(base: &Path, session: &str) -> (PathBuf, PathBuf) {
+    let repo_root = create_git_repo(base, "repo");
+    let wt_path = repo_root
+        .join(".moa-desktop")
+        .join("worktrees")
+        .join(session);
+    std::fs::create_dir_all(wt_path.parent().expect("worktree parent"))
+        .expect("worktree parent dir");
+    run_git(
+        &repo_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &format!("test-{session}"),
+            path_str(&wt_path),
+        ],
+    );
+    (repo_root, wt_path)
+}
+
+fn create_git_repo(base: &Path, name: &str) -> PathBuf {
+    let repo_root = base.join(name);
+    std::fs::create_dir_all(&repo_root).expect("repo dir");
+    run_git(&repo_root, &["init"]);
+    std::fs::write(repo_root.join("README.md"), "test\n").expect("seed file");
+    run_git(&repo_root, &["add", "README.md"]);
+    run_git(
+        &repo_root,
+        &[
+            "-c",
+            "user.name=MoA Test",
+            "-c",
+            "user.email=moa-test@example.invalid",
+            "commit",
+            "-m",
+            "init",
+        ],
+    );
+    repo_root
+}
+
+fn run_git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("spawn git");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+fn create_junction(target: &Path, link: &Path) {
+    let output = Command::new("cmd")
+        .args(["/C", "mklink", "/J", path_str(link), path_str(target)])
+        .output()
+        .expect("spawn mklink");
+    assert!(
+        output.status.success(),
+        "mklink /J failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn path_str(path: &Path) -> &str {
+    path.to_str().expect("path is valid UTF-8")
 }
 
 #[tokio::test]
@@ -385,7 +787,10 @@ async fn item_completed_with_warning_payload_does_not_mark_failed() {
             ..
         } => {
             assert_eq!(item_type.as_deref(), Some("error"));
-            assert!(error_message.as_deref().unwrap_or("").contains("deprecated"));
+            assert!(error_message
+                .as_deref()
+                .unwrap_or("")
+                .contains("deprecated"));
         }
         _ => unreachable!(),
     }

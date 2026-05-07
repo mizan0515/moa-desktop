@@ -177,7 +177,10 @@ fn mock_dir() -> PathBuf {
     // Resolved at compile time; dev-tool path. Production would inject via
     // settings — out of scope for T7-thin.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest.parent().map(|p| p.join("mockResponses")).unwrap_or_else(|| manifest.join("mockResponses"))
+    manifest
+        .parent()
+        .map(|p| p.join("mockResponses"))
+        .unwrap_or_else(|| manifest.join("mockResponses"))
 }
 
 fn mock_file(name: &str) -> PathBuf {
@@ -274,8 +277,22 @@ async fn run_session(
     );
 
     // Preflight is a no-op in mock mode beyond the announce/ack pair.
-    emit(&app, &sid, Phase::Preflight, Some(Lane::System), "phase_start", None);
-    emit(&app, &sid, Phase::Preflight, Some(Lane::System), "phase_end", None);
+    emit(
+        &app,
+        &sid,
+        Phase::Preflight,
+        Some(Lane::System),
+        "phase_start",
+        None,
+    );
+    emit(
+        &app,
+        &sid,
+        Phase::Preflight,
+        Some(Lane::System),
+        "phase_end",
+        None,
+    );
 
     let cancelled = handle.cancelled.clone();
     let active = handle.active.clone();
@@ -310,7 +327,14 @@ async fn run_session(
         }
     }
 
-    emit(&app, &sid, Phase::Final, Some(Lane::System), "session_done", None);
+    emit(
+        &app,
+        &sid,
+        Phase::Final,
+        Some(Lane::System),
+        "session_done",
+        None,
+    );
 }
 
 #[tauri::command]

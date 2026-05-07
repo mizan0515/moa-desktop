@@ -141,7 +141,9 @@ mod tests {
         });
         let result = sup_panic.into_outcome().await;
         match result {
-            Err(LaneError::Panic(msg)) => assert!(msg.contains("simulated lane panic"), "got: {msg}"),
+            Err(LaneError::Panic(msg)) => {
+                assert!(msg.contains("simulated lane panic"), "got: {msg}")
+            }
             other => panic!("expected Panic, got {other:?}"),
         }
 
@@ -212,8 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn ok_result_passes_through() {
-        let sup: LaneSupervisor<Result<u32, String>> =
-            LaneSupervisor::spawn(async { Ok(7) });
+        let sup: LaneSupervisor<Result<u32, String>> = LaneSupervisor::spawn(async { Ok(7) });
         assert_eq!(sup.into_outcome().await.unwrap(), Ok(7));
     }
 }

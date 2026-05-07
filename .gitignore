@@ -1,7 +1,9 @@
 # Claude Code session metadata
+.claude/
 .claude-handoff.md
 .claude-handoff-*.md
-.claude/worktrees/
+.worktrees/
+.moa-desktop/
 
 # Tauri / Vite caches
 .vite/

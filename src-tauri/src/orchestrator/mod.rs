@@ -20,7 +20,8 @@ pub mod supervisor;
 pub mod verify;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -376,7 +377,14 @@ async fn drive_session(
 
     // 1. Classify ──────────────────────────────────────────────────────────
     ctx.set_state(SessionState::Classifying).await;
-    emit(&ctx.app, &ctx.sid, Phase::Classify, Some(Lane::System), "phase_start", None);
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Classify,
+        Some(Lane::System),
+        "phase_start",
+        None,
+    );
     let flow = classify(&ClassifyInput {
         task: start.task.clone(),
         files: start.files.clone(),
@@ -412,7 +420,8 @@ async fn drive_session(
 
     // 3. Synthesis (TS callback) ───────────────────────────────────────────
     let synthesis_json = if let Some(pair) = synth_input.as_ref() {
-        ctx.set_state(SessionState::AwaitingSynthesis { flow }).await;
+        ctx.set_state(SessionState::AwaitingSynthesis { flow })
+            .await;
         emit(
             &ctx.app,
             &ctx.sid,
@@ -426,7 +435,14 @@ async fn drive_session(
         );
         match await_synthesis(&ctx, &mut cmd_rx).await {
             Some(s) => {
-                emit(&ctx.app, &ctx.sid, Phase::Synthesis, Some(Lane::System), "phase_end", None);
+                emit(
+                    &ctx.app,
+                    &ctx.sid,
+                    Phase::Synthesis,
+                    Some(Lane::System),
+                    "phase_end",
+                    None,
+                );
                 s
             }
             None => return finalize_cancelled(&ctx).await,
@@ -518,12 +534,13 @@ async fn drive_session(
 
     // 6. Final ────────────────────────────────────────────────────────────
     if let Some(j) = ctx.journal.as_ref() {
-        let _ = j.note(
-            JournalPhase::SessionEnd,
-            format!("ok={session_ok}"),
-        );
+        let _ = j.note(JournalPhase::SessionEnd, format!("ok={session_ok}"));
     }
-    ctx.set_state(SessionState::Final { flow, ok: session_ok }).await;
+    ctx.set_state(SessionState::Final {
+        flow,
+        ok: session_ok,
+    })
+    .await;
     let mut payload = serde_json::json!({
         "flow": flow.as_str(),
         "ok": session_ok,
@@ -562,8 +579,10 @@ async fn finalize_failed(ctx: &DriverCtx, msg: String) {
     if let Some(j) = ctx.journal.as_ref() {
         let _ = j.note(JournalPhase::SessionEnd, format!("failed: {msg}"));
     }
-    ctx.set_state(SessionState::Failed { message: msg.clone() })
-        .await;
+    ctx.set_state(SessionState::Failed {
+        message: msg.clone(),
+    })
+    .await;
     emit(
         &ctx.app,
         &ctx.sid,
@@ -593,7 +612,14 @@ async fn run_first_pass_pair(
         codex_done: false,
     })
     .await;
-    emit(&ctx.app, &ctx.sid, Phase::FirstPass, Some(Lane::System), "phase_start", None);
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::FirstPass,
+        Some(Lane::System),
+        "phase_start",
+        None,
+    );
 
     let claude_adapter = deps.claude(start.mock_mode);
     let codex_adapter = deps.codex(start.mock_mode);
@@ -619,8 +645,15 @@ async fn run_first_pass_pair(
             .await
             .map_err(|e| format!("claude firstpass spawn: {e}"))?;
         track_active(&active_a, "claude-firstpass", stream.control.clone());
-        let n = drain_claude_events(&app_a, &sid_a, Phase::FirstPass, Lane::Claude, stream.events, &cancelled_a)
-            .await;
+        let n = drain_claude_events(
+            &app_a,
+            &sid_a,
+            Phase::FirstPass,
+            Lane::Claude,
+            stream.events,
+            &cancelled_a,
+        )
+        .await;
         untrack_active(&active_a, "claude-firstpass");
         Ok(n)
     });
@@ -638,8 +671,15 @@ async fn run_first_pass_pair(
         // so a mid-stream cancel aborts both (pre-FIX-F we tracked only one
         // and let the other keep burning tokens until natural exit).
         track_active(&active_b, "codex-firstpass", stream.control.clone());
-        let n = drain_codex_events(&app_b, &sid_b, Phase::FirstPass, Lane::Codex, stream.events, &cancelled_b)
-            .await;
+        let n = drain_codex_events(
+            &app_b,
+            &sid_b,
+            Phase::FirstPass,
+            Lane::Codex,
+            stream.events,
+            &cancelled_b,
+        )
+        .await;
         untrack_active(&active_b, "codex-firstpass");
         Ok(n)
     });
@@ -690,13 +730,7 @@ fn untrack_active(reg: &CancelRegistry, run_id: &str) {
 /// Emit a canonical WorkerEvent on `kind="line"`. The TS-side
 /// `parseWorkerNdjson` expects exactly this shape — see
 /// [`crate::synthesis::WorkerEvent`].
-fn emit_worker_event(
-    app: &AppHandle,
-    sid: &str,
-    phase: Phase,
-    lane: Lane,
-    ev: &WorkerEvent,
-) {
+fn emit_worker_event(app: &AppHandle, sid: &str, phase: Phase, lane: Lane, ev: &WorkerEvent) {
     if let Ok(payload) = serde_json::to_value(ev) {
         emit(app, sid, phase, Some(lane), "line", Some(payload));
     }
@@ -705,13 +739,7 @@ fn emit_worker_event(
 /// Emit the raw adapter envelope on `kind="worker_raw"`. The frontend
 /// uses this for diagnostics only — the lane buffer that feeds synthesis
 /// must come from `kind="line"`.
-fn emit_worker_raw<T: Serialize>(
-    app: &AppHandle,
-    sid: &str,
-    phase: Phase,
-    lane: Lane,
-    raw: &T,
-) {
+fn emit_worker_raw<T: Serialize>(app: &AppHandle, sid: &str, phase: Phase, lane: Lane, raw: &T) {
     if let Ok(payload) = serde_json::to_value(raw) {
         emit(app, sid, phase, Some(lane), "worker_raw", Some(payload));
     }
@@ -725,9 +753,7 @@ fn emit_worker_raw<T: Serialize>(
 fn worker_events_from_claude(ev: &ClaudeEvent) -> Vec<WorkerEvent> {
     match ev {
         ClaudeEvent::Assistant { text, .. } => extract_from_text(text),
-        ClaudeEvent::Other { raw, .. } => {
-            WorkerEvent::try_passthrough(raw).into_iter().collect()
-        }
+        ClaudeEvent::Other { raw, .. } => WorkerEvent::try_passthrough(raw).into_iter().collect(),
         _ => Vec::new(),
     }
 }
@@ -757,9 +783,7 @@ fn worker_events_from_codex(ev: &CodexEvent) -> Vec<WorkerEvent> {
                 extract_from_text(text)
             }
         }
-        CodexEvent::Other { raw, .. } => {
-            WorkerEvent::try_passthrough(raw).into_iter().collect()
-        }
+        CodexEvent::Other { raw, .. } => WorkerEvent::try_passthrough(raw).into_iter().collect(),
         _ => Vec::new(),
     }
 }
@@ -875,12 +899,8 @@ async fn run_adversarial_loop(
 
         // Default reviewer: Codex (Claude is user-facing session holder).
         let reviewer = adversarial::default_reviewer(Lane::Claude);
-        let prompt_body = adversarial::render_prompt(
-            &start.task,
-            synthesis_json,
-            round,
-            MAX_ADVERSARIAL_ROUNDS,
-        );
+        let prompt_body =
+            adversarial::render_prompt(&start.task, synthesis_json, round, MAX_ADVERSARIAL_ROUNDS);
 
         // Adversarial uses firstpass argv (read-only) but with the embedded
         // synthesis prompt body — we feed the body as the "task" so the
@@ -912,21 +932,9 @@ async fn run_adversarial_loop(
                         }
                     }
                     for we in worker_events_from_codex(&ev) {
-                        emit_worker_event(
-                            &ctx.app,
-                            &ctx.sid,
-                            Phase::Adversarial,
-                            Lane::Codex,
-                            &we,
-                        );
+                        emit_worker_event(&ctx.app, &ctx.sid, Phase::Adversarial, Lane::Codex, &we);
                     }
-                    emit_worker_raw(
-                        &ctx.app,
-                        &ctx.sid,
-                        Phase::Adversarial,
-                        Lane::Codex,
-                        &ev,
-                    );
+                    emit_worker_raw(&ctx.app, &ctx.sid, Phase::Adversarial, Lane::Codex, &ev);
                     if matches!(ev, CodexEvent::Exit { .. }) {
                         break;
                     }
@@ -966,13 +974,7 @@ async fn run_adversarial_loop(
                             &we,
                         );
                     }
-                    emit_worker_raw(
-                        &ctx.app,
-                        &ctx.sid,
-                        Phase::Adversarial,
-                        Lane::Claude,
-                        &ev,
-                    );
+                    emit_worker_raw(&ctx.app, &ctx.sid, Phase::Adversarial, Lane::Claude, &ev);
                     if matches!(ev, ClaudeEvent::Exit { .. }) {
                         break;
                     }
@@ -1030,6 +1032,192 @@ async fn run_adversarial_loop(
     }
 }
 
+fn git_top_level(cwd: &Path) -> std::io::Result<PathBuf> {
+    let top_level = git_output(cwd, &["rev-parse", "--show-toplevel"])?;
+    canonicalize_existing(Path::new(top_level.trim()))
+}
+
+fn canonicalize_existing(path: &Path) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path).or_else(|_| std::fs::canonicalize(path))
+}
+
+fn git_output(cwd: &Path, args: &[&str]) -> std::io::Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .output()?;
+
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
+fn path_is_within_or_equal(path: &Path, parent: &Path) -> bool {
+    path.ancestors().any(|ancestor| same_path(ancestor, parent))
+}
+
+fn validate_mutation_worktree_parent(repo_root: &Path, parent: &Path) -> Result<PathBuf, String> {
+    let repo = canonicalize_existing(repo_root)
+        .map_err(|e| format!("worktree repo root canonicalize: {e}"))?;
+    let literal_parent = repo.join(".moa-desktop").join("worktrees");
+    let parent =
+        canonicalize_existing(parent).map_err(|e| format!("worktree parent canonicalize: {e}"))?;
+    if !same_path(&parent, &literal_parent) {
+        return Err(format!(
+            "worktree parent must be literal repo-local .moa-desktop/worktrees, not a reparse/junction alias: {} != {}",
+            parent.display(),
+            literal_parent.display()
+        ));
+    }
+    if !path_is_within_or_equal(&parent, &repo) {
+        return Err(format!(
+            "worktree parent escapes git top-level: {} not under {}",
+            parent.display(),
+            repo.display()
+        ));
+    }
+    Ok(parent)
+}
+
+fn validate_moa_dir_before_worktree_parent_create(repo_root: &Path) -> Result<(), String> {
+    let repo = canonicalize_existing(repo_root)
+        .map_err(|e| format!("worktree repo root canonicalize: {e}"))?;
+    let moa_dir = repo.join(".moa-desktop");
+    if !moa_dir.exists() {
+        return Ok(());
+    }
+
+    let moa_dir =
+        canonicalize_existing(&moa_dir).map_err(|e| format!(".moa-desktop canonicalize: {e}"))?;
+    if !same_path(&moa_dir, &repo.join(".moa-desktop")) {
+        return Err(format!(
+            ".moa-desktop must be the literal repo-local policy/runtime directory, not a reparse/junction alias: {}",
+            moa_dir.display()
+        ));
+    }
+    if !path_is_within_or_equal(&moa_dir, &repo) {
+        return Err(format!(
+            ".moa-desktop escapes git top-level before worktree parent creation: {} not under {}",
+            moa_dir.display(),
+            repo.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_orchestrator_mutation_worktree(
+    repo_root: &Path,
+    expected_parent: &Path,
+    worktree_path: &Path,
+) -> Result<(), String> {
+    let repo = canonicalize_existing(repo_root)
+        .map_err(|e| format!("worktree repo root canonicalize: {e}"))?;
+    let literal_parent = repo.join(".moa-desktop").join("worktrees");
+    let expected_parent = canonicalize_existing(expected_parent)
+        .map_err(|e| format!("worktree parent canonicalize: {e}"))?;
+    let worktree = canonicalize_existing(worktree_path)
+        .map_err(|e| format!("mutation worktree canonicalize: {e}"))?;
+
+    if !same_path(&expected_parent, &literal_parent) {
+        return Err(format!(
+            "worktree parent must be literal repo-local .moa-desktop/worktrees, not a reparse/junction alias: {} != {}",
+            expected_parent.display(),
+            literal_parent.display()
+        ));
+    }
+    if !path_is_within_or_equal(&expected_parent, &repo) {
+        return Err(format!(
+            "worktree parent escapes git top-level: {} not under {}",
+            expected_parent.display(),
+            repo.display()
+        ));
+    }
+    if !path_is_within_or_equal(&worktree, &repo) {
+        return Err(format!(
+            "mutation worktree escapes git top-level: {} not under {}",
+            worktree.display(),
+            repo.display()
+        ));
+    }
+
+    let Some(parent) = worktree.parent() else {
+        return Err("mutation worktree has no parent".into());
+    };
+    if !same_path(parent, &expected_parent) || worktree.file_name().is_none() {
+        return Err(format!(
+            "mutation worktree is not a direct child of {}: {}",
+            expected_parent.display(),
+            worktree.display()
+        ));
+    }
+
+    let worktree_top = git_top_level(&worktree)
+        .map_err(|e| format!("mutation worktree git top-level check failed: {e}"))?;
+    if !same_path(&worktree_top, &worktree) {
+        return Err(format!(
+            "mutation worktree path is not its git top-level: {} != {}",
+            worktree.display(),
+            worktree_top.display()
+        ));
+    }
+
+    let worktree_list = git_output(&repo, &["worktree", "list", "--porcelain"])
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+    let registered = worktree_list
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(|listed| canonicalize_existing(Path::new(listed)).ok())
+        .any(|listed| same_path(&listed, &worktree));
+
+    if !registered {
+        return Err(format!(
+            "mutation worktree is not registered in git worktree list: {}",
+            worktree.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn remove_worktree_after_error(ctx: &DriverCtx, wt: &crate::git::Worktree, reason: &str) -> String {
+    match wt.remove() {
+        Ok(()) => {
+            if let Some(j) = ctx.journal.as_ref() {
+                let _ = j.note(JournalPhase::WorktreeRemoved, reason);
+            }
+            format!("{reason}; worktree removed")
+        }
+        Err(e) => {
+            if let Some(j) = ctx.journal.as_ref() {
+                let _ = j.note(
+                    JournalPhase::WorktreeRemoved,
+                    format!("{reason}; cleanup failed: {e}"),
+                );
+            }
+            format!("{reason}; worktree cleanup failed: {e}")
+        }
+    }
+}
+
 // ─── mutation phase ───────────────────────────────────────────────────────
 
 enum MutationOutcome {
@@ -1049,7 +1237,9 @@ async fn run_mutation_phase(
         Flow::B => Lane::Codex,
         _ => Lane::Claude,
     };
-    let owner_worker = owner.to_worker().ok_or_else(|| "system lane cannot mutate".to_string())?;
+    let owner_worker = owner
+        .to_worker()
+        .ok_or_else(|| "system lane cannot mutate".to_string())?;
 
     ctx.set_state(SessionState::AwaitingMutationConfirm {
         flow,
@@ -1083,10 +1273,19 @@ async fn run_mutation_phase(
     }
 
     ctx.set_state(SessionState::Mutating { flow, owner }).await;
-    emit(&ctx.app, &ctx.sid, Phase::Mutation, Some(owner), "phase_start", None);
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Mutation,
+        Some(owner),
+        "phase_start",
+        None,
+    );
+
+    let repo_root = git_top_level(&start.cwd).map_err(|e| format!("resolve git top-level: {e}"))?;
 
     // T4 lock acquire — Repo → Project → Lane chain.
-    let repo_key = crate::git::canonical::RepoKey::from_path(&start.cwd);
+    let repo_key = crate::git::canonical::RepoKey::from_path(&repo_root);
     let repo_guard = deps
         .lock_manager
         .acquire_repo(&repo_key)
@@ -1098,7 +1297,12 @@ async fn run_mutation_phase(
     let lock_key = format!("session:{}", &ctx.sid);
     let _lane_guard = deps
         .lock_manager
-        .acquire_lane(&project_guard, &lock_key, owner_worker, LockSource::Scheduler)
+        .acquire_lane(
+            &project_guard,
+            &lock_key,
+            owner_worker,
+            LockSource::Scheduler,
+        )
         .map_err(|e| format!("acquire lane lock: {e}"))?;
 
     // FIX-F — durability hook: the lane lock is now ours. Journal the
@@ -1113,21 +1317,34 @@ async fn run_mutation_phase(
             pid: 0,
             base_hashes: Default::default(),
             patch_path: None,
-            note: Some(format!("project={} lock_key={}", &start.project_id, &lock_key)),
+            note: Some(format!(
+                "project={} lock_key={}",
+                &start.project_id, &lock_key
+            )),
         });
     }
 
-    // Worktree creation: under <repo>/.moa-desktop/worktrees/<sid>
-    let wt_root = start.cwd.join(".moa-desktop").join("worktrees").join(&ctx.sid);
+    // Worktree creation: under <git-top-level>/.moa-desktop/worktrees/<sid>
+    let wt_root = repo_root
+        .join(".moa-desktop")
+        .join("worktrees")
+        .join(&ctx.sid);
+    let wt_parent = wt_root
+        .parent()
+        .ok_or_else(|| "worktree path has no parent".to_string())?;
+    validate_moa_dir_before_worktree_parent_create(&repo_root)?;
+    std::fs::create_dir_all(wt_parent).map_err(|e| format!("worktree parent mkdir: {e}"))?;
+    let wt_parent = validate_mutation_worktree_parent(&repo_root, wt_parent)?;
     let branch = Some(format!("orch/{}", &ctx.sid));
-    let wt = crate::git::Worktree::add(&start.cwd, &wt_root, branch.as_deref())
+    let wt = crate::git::Worktree::add(&repo_root, &wt_root, branch.as_deref())
         .map_err(|e| format!("worktree add: {e}"))?;
+    if let Err(e) = validate_orchestrator_mutation_worktree(&repo_root, &wt_parent, &wt.path) {
+        let cleanup = remove_worktree_after_error(&ctx, &wt, "post-add-validation-failed");
+        return Err(format!("worktree validation: {e}; {cleanup}"));
+    }
 
     if let Some(j) = ctx.journal.as_ref() {
-        let _ = j.note(
-            JournalPhase::WorktreeCreated,
-            wt.path.display().to_string(),
-        );
+        let _ = j.note(JournalPhase::WorktreeCreated, wt.path.display().to_string());
     }
 
     emit(
@@ -1147,10 +1364,13 @@ async fn run_mutation_phase(
                 task: start.task.clone(),
                 worktree_path: wt.path.clone(),
             };
-            let stream = adapter
-                .mutation(req)
-                .await
-                .map_err(|e| format!("claude mutation spawn: {e}"))?;
+            let stream = match adapter.mutation(req).await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    let cleanup = remove_worktree_after_error(&ctx, &wt, "claude-spawn-failed");
+                    return Err(format!("claude mutation spawn: {e}; {cleanup}"));
+                }
+            };
             track_active(&ctx.active, "mutation", stream.control.clone());
             if let Some(j) = ctx.journal.as_ref() {
                 let _ = j.note(JournalPhase::WorkerStarted, "claude-mutation");
@@ -1171,12 +1391,16 @@ async fn run_mutation_phase(
             let adapter = deps.codex(start.mock_mode);
             let req = crate::adapters::codex::MutationRequest {
                 task: start.task.clone(),
+                repo_root: repo_root.clone(),
                 worktree_path: wt.path.clone(),
             };
-            let stream = adapter
-                .mutation(req)
-                .await
-                .map_err(|e| format!("codex mutation spawn: {e}"))?;
+            let stream = match adapter.mutation(req).await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    let cleanup = remove_worktree_after_error(&ctx, &wt, "codex-spawn-failed");
+                    return Err(format!("codex mutation spawn: {e}; {cleanup}"));
+                }
+            };
             track_active(&ctx.active, "mutation", stream.control.clone());
             if let Some(j) = ctx.journal.as_ref() {
                 let _ = j.note(JournalPhase::WorkerStarted, "codex-mutation");
@@ -1225,7 +1449,10 @@ async fn run_mutation_phase(
     }
 
     // Extract patch + check + apply.
-    let patch_dir = start.cwd.join(".moa-desktop").join("patches").join(&ctx.sid);
+    let patch_dir = repo_root
+        .join(".moa-desktop")
+        .join("patches")
+        .join(&ctx.sid);
     let patch = crate::git::patch::extract(&wt, &patch_dir, "mutation")
         .map_err(|e| format!("patch extract: {e}"))?;
     if let Some(j) = ctx.journal.as_ref() {
@@ -1237,7 +1464,11 @@ async fn run_mutation_phase(
             pid: 0,
             base_hashes: Default::default(),
             patch_path: Some(patch.path.display().to_string()),
-            note: Some(format!("size={} empty={}", patch.text.len(), patch.is_empty())),
+            note: Some(format!(
+                "size={} empty={}",
+                patch.text.len(),
+                patch.is_empty()
+            )),
         });
     }
     emit(
@@ -1269,7 +1500,7 @@ async fn run_mutation_phase(
         return Ok(MutationOutcome::Skipped);
     }
 
-    crate::git::patch::check(&start.cwd, &patch).map_err(|e| {
+    crate::git::patch::check(&repo_root, &patch).map_err(|e| {
         if let Some(j) = ctx.journal.as_ref() {
             let _ = j.note(JournalPhase::PatchRejected, format!("check failed: {e}"));
         }
@@ -1278,7 +1509,7 @@ async fn run_mutation_phase(
     if let Some(j) = ctx.journal.as_ref() {
         let _ = j.note(JournalPhase::PatchVerified, "");
     }
-    crate::git::patch::apply(&start.cwd, &patch).map_err(|e| format!("patch apply: {e}"))?;
+    crate::git::patch::apply(&repo_root, &patch).map_err(|e| format!("patch apply: {e}"))?;
     if let Some(j) = ctx.journal.as_ref() {
         let _ = j.append(Entry {
             seq: 0,
@@ -1315,7 +1546,14 @@ async fn run_verify_phase(
     flow: Flow,
 ) -> verify::VerifyOutcome {
     ctx.set_state(SessionState::Verifying { flow }).await;
-    emit(&ctx.app, &ctx.sid, Phase::Verify, Some(Lane::System), "phase_start", None);
+    emit(
+        &ctx.app,
+        &ctx.sid,
+        Phase::Verify,
+        Some(Lane::System),
+        "phase_start",
+        None,
+    );
 
     let mut spec = verify::VerifySpec::new(&start.cwd);
     if let Some(c) = start.verify_cmd.as_ref() {
@@ -1450,7 +1688,10 @@ pub async fn orch_submit_synthesis(
     synthesis_json: String,
 ) -> Result<bool, String> {
     Ok(coord
-        .post(&session_id, SessionCommand::SubmitSynthesis { synthesis_json })
+        .post(
+            &session_id,
+            SessionCommand::SubmitSynthesis { synthesis_json },
+        )
         .await)
 }
 
@@ -1589,5 +1830,234 @@ mod fix_d_tests {
         let out = worker_events_from_codex(&ev);
         assert_eq!(out.len(), 1);
         assert!(matches!(out[0], WorkerEvent::OpenQuestion { .. }));
+    }
+}
+
+#[cfg(test)]
+mod mutation_worktree_guard_tests {
+    use super::{validate_mutation_worktree_parent, validate_orchestrator_mutation_worktree};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    #[test]
+    fn worktree_parent_outside_repo_is_rejected_before_add() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let outside = tmp.path().join("outside-worktrees");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+
+        let err = validate_mutation_worktree_parent(&repo_root, &outside)
+            .expect_err("outside worktree parent must be rejected");
+
+        assert!(
+            err.contains("worktree parent must be literal repo-local .moa-desktop/worktrees"),
+            "unexpected error: {err}"
+        );
+        assert!(!outside.join("session-escape").exists());
+    }
+
+    #[test]
+    fn post_add_validation_rejects_unregistered_git_repo() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let parent = repo_root.join(".moa-desktop").join("worktrees");
+        std::fs::create_dir_all(&parent).expect("worktree parent");
+        let rogue = create_git_repo(&parent, "not-registered");
+
+        let err = validate_orchestrator_mutation_worktree(&repo_root, &parent, &rogue)
+            .expect_err("unregistered nested git repo must be rejected");
+
+        assert!(
+            err.contains("not registered in git worktree list"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_worktree_parent_escape_is_rejected_before_add() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let outside = tmp.path().join("outside-worktrees");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::create_dir_all(repo_root.join(".moa-desktop")).expect("moa dir");
+        let parent = repo_root.join(".moa-desktop").join("worktrees");
+        symlink(&outside, &parent).expect("symlink");
+
+        let err = validate_mutation_worktree_parent(&repo_root, &parent)
+            .expect_err("symlinked outside parent must be rejected");
+
+        assert!(
+            err.contains("escapes git top-level"),
+            "unexpected error: {err}"
+        );
+        assert!(!outside.join("session-escape").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctioned_worktree_parent_escape_is_rejected_before_add() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let outside = tmp.path().join("outside-worktrees");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::create_dir_all(repo_root.join(".moa-desktop")).expect("moa dir");
+        let parent = repo_root.join(".moa-desktop").join("worktrees");
+        create_junction(&outside, &parent);
+
+        let err = validate_mutation_worktree_parent(&repo_root, &parent)
+            .expect_err("junctioned outside parent must be rejected");
+
+        assert!(
+            err.contains("escapes git top-level") || err.contains("reparse/junction alias"),
+            "unexpected error: {err}"
+        );
+        assert!(!outside.join("session-escape").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctioned_worktree_parent_in_repo_alias_is_rejected_before_add() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let alias = repo_root.join("src").join(".worktrees");
+        std::fs::create_dir_all(&alias).expect("in-repo alias target");
+        std::fs::create_dir_all(repo_root.join(".moa-desktop")).expect("moa dir");
+        let parent = repo_root.join(".moa-desktop").join("worktrees");
+        create_junction(&alias, &parent);
+
+        let err = validate_mutation_worktree_parent(&repo_root, &parent)
+            .expect_err("in-repo junction alias parent must be rejected");
+
+        assert!(
+            err.contains("reparse/junction alias"),
+            "unexpected error: {err}"
+        );
+        assert!(!alias.join("session-alias").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_moa_dir_escape_is_rejected_before_parent_create() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let outside = tmp.path().join("outside-moa");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        symlink(&outside, repo_root.join(".moa-desktop")).expect("symlink");
+
+        let err = super::validate_moa_dir_before_worktree_parent_create(&repo_root)
+            .expect_err("symlinked .moa-desktop escape must be rejected");
+
+        assert!(
+            err.contains(".moa-desktop escapes git top-level"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !outside.join("worktrees").exists(),
+            "guard must reject before creating the outside worktrees parent"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctioned_moa_dir_escape_is_rejected_before_parent_create() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let outside = tmp.path().join("outside-moa");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        create_junction(&outside, &repo_root.join(".moa-desktop"));
+
+        let err = super::validate_moa_dir_before_worktree_parent_create(&repo_root)
+            .expect_err("junctioned .moa-desktop escape must be rejected");
+
+        assert!(
+            err.contains(".moa-desktop escapes git top-level")
+                || err.contains("reparse/junction alias"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !outside.join("worktrees").exists(),
+            "guard must reject before creating the outside worktrees parent"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctioned_moa_dir_in_repo_alias_is_rejected_before_parent_create() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = create_git_repo(tmp.path(), "repo");
+        let alias = repo_root.join("src").join(".moa-desktop");
+        std::fs::create_dir_all(&alias).expect("in-repo alias target");
+        create_junction(&alias, &repo_root.join(".moa-desktop"));
+
+        let err = super::validate_moa_dir_before_worktree_parent_create(&repo_root)
+            .expect_err("in-repo junctioned .moa-desktop alias must be rejected");
+
+        assert!(
+            err.contains("reparse/junction alias"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !alias.join("worktrees").exists(),
+            "guard must reject before creating worktrees through the alias"
+        );
+    }
+
+    fn create_git_repo(base: &Path, name: &str) -> PathBuf {
+        let repo_root = base.join(name);
+        std::fs::create_dir_all(&repo_root).expect("repo dir");
+        run_git(&repo_root, &["init"]);
+        std::fs::write(repo_root.join("README.md"), "test\n").expect("seed file");
+        run_git(&repo_root, &["add", "README.md"]);
+        run_git(
+            &repo_root,
+            &[
+                "-c",
+                "user.name=MoA Test",
+                "-c",
+                "user.email=moa-test@example.invalid",
+                "commit",
+                "-m",
+                "init",
+            ],
+        );
+        repo_root
+    }
+
+    fn run_git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    fn create_junction(target: &Path, link: &Path) {
+        let output = Command::new("cmd")
+            .args(["/C", "mklink", "/J", path_str(link), path_str(target)])
+            .output()
+            .expect("spawn mklink");
+        assert!(
+            output.status.success(),
+            "mklink /J failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn path_str(path: &Path) -> &str {
+        path.to_str().expect("path utf8")
     }
 }

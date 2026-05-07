@@ -10,8 +10,9 @@
 //! * [`mutation`](CodexAdapter::mutation) — Windows-specific:
 //!   `--dangerously-bypass-approvals-and-sandbox` inside an isolated
 //!   worktree (S2 finding #5: `workspace-write` is broken on Windows).
-//!   Caller is responsible for ensuring `worktree_path` is under
-//!   `~/.moa-desktop/worktrees/<sid>/`.
+//!   `mutation()` rejects paths unless they are the orchestrator-owned,
+//!   repo-local `<repo>/.moa-desktop/worktrees/<sid>/` layout and are
+//!   registered in `git worktree list`.
 //!
 //! Differences from the Claude adapter (T5a):
 //! * Codex has no system-prompt flag — Worker guard is **prefixed** to the
@@ -24,6 +25,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -32,8 +34,8 @@ use tokio::sync::mpsc;
 
 use crate::process::traits::StdinPolicy;
 use crate::process::{
-    ProcessControl, ProcessError, ProcessExit, ProcessHandle, ProcessLine, ProcessRunner,
-    ProcessSpec, Stream as PStream,
+    ProcessControl, ProcessError, ProcessErrorKind, ProcessExit, ProcessHandle, ProcessLine,
+    ProcessRunner, ProcessSpec, Stream as PStream,
 };
 
 /// Static config built at startup from `~/.moa-desktop/settings.json` +
@@ -79,7 +81,10 @@ impl CodexConfig {
         let firstpass_template = read("codex_firstpass_template.txt")?;
         let mutation_template = read("codex_mutation_template.txt")?;
         let mut env = HashMap::new();
-        env.insert("CODEX_HOME".into(), codex_home.to_string_lossy().into_owned());
+        env.insert(
+            "CODEX_HOME".into(),
+            codex_home.to_string_lossy().into_owned(),
+        );
         Ok(Self {
             program,
             reasoning_effort: "high".into(),
@@ -108,8 +113,14 @@ pub struct FirstPassRequest {
 #[derive(Debug, Clone)]
 pub struct MutationRequest {
     pub task: String,
-    /// Isolated worktree path. Caller is responsible for ensuring this is
-    /// under `~/.moa-desktop/worktrees/<sid>/` (T4 lock manager).
+    /// Main repository root. Used to prove the mutation worktree is the
+    /// orchestrator-owned repo-local path, not an arbitrary similarly named
+    /// `.moa-desktop/worktrees` directory elsewhere.
+    pub repo_root: PathBuf,
+    /// Isolated worktree path. Caller is responsible for provisioning this
+    /// through the T4 lock manager. The adapter also proves the path is a
+    /// repo-local `.moa-desktop/worktrees/<sid>/` direct child and a git
+    /// registered worktree before spawning bypass mode.
     pub worktree_path: PathBuf,
 }
 
@@ -151,10 +162,7 @@ pub enum CodexEvent {
         raw: Value,
     },
     /// `type=error` — fatal error event, distinct from `turn.failed`.
-    Error {
-        message: Option<String>,
-        raw: Value,
-    },
+    Error { message: Option<String>, raw: Value },
     /// Any other `type=*` line (forward-compat — schema is sparsely
     /// documented; we don't drop unknowns).
     Other { type_: String, raw: Value },
@@ -202,7 +210,10 @@ impl CodexAdapter {
             "-c".into(),
             format!("approval_policy=\"{}\"", self.config.approval_policy),
             "-c".into(),
-            format!("model_reasoning_effort=\"{}\"", self.config.reasoning_effort),
+            format!(
+                "model_reasoning_effort=\"{}\"",
+                self.config.reasoning_effort
+            ),
             "-c".into(),
             format!("web_search=\"{}\"", self.config.web_search),
             "--sandbox".into(),
@@ -217,11 +228,12 @@ impl CodexAdapter {
 
     /// Build the argv for a mutation run. Pure — exposed for tests.
     /// Uses `--dangerously-bypass-approvals-and-sandbox` (Windows-required;
-    /// `workspace-write` is broken — S2 finding #5). Caller MUST ensure
-    /// `worktree` is an isolated path under `~/.moa-desktop/worktrees/`.
+    /// `workspace-write` is broken — S2 finding #5). Call through
+    /// [`mutation`](Self::mutation), which rejects non-MoA worktree paths
+    /// before this argv is spawned.
     ///
-    /// **Backlog #19 (pending)** — sandbox 모드 표기가 PLAN.md/DESIGN.md 와 drift.
-    /// 본 함수 / sandbox flag 변경 전에 #19 결정 트리 확인.
+    /// **Backlog #19 resolved** — source of truth is bypass-in-isolated-worktree.
+    /// Do not reintroduce `workspace-write` for Windows mutation without a new risk review.
     pub fn mutation_argv(&self, worktree: &Path, prompt: &str) -> Vec<String> {
         vec![
             self.config.program.to_string_lossy().into_owned(),
@@ -230,7 +242,10 @@ impl CodexAdapter {
             "-c".into(),
             format!("approval_policy=\"{}\"", self.config.approval_policy),
             "-c".into(),
-            format!("model_reasoning_effort=\"{}\"", self.config.reasoning_effort),
+            format!(
+                "model_reasoning_effort=\"{}\"",
+                self.config.reasoning_effort
+            ),
             "-c".into(),
             format!("web_search=\"{}\"", self.config.web_search),
             "--dangerously-bypass-approvals-and-sandbox".into(),
@@ -282,17 +297,14 @@ impl CodexAdapter {
 
     /// Spawn a mutation-owner run inside `req.worktree_path`.
     pub async fn mutation(&self, req: MutationRequest) -> Result<CodexStream, ProcessError> {
+        validate_moa_mutation_worktree(&req.repo_root, &req.worktree_path)?;
         let prompt = self.render_mutation_prompt(&req);
         let argv = self.mutation_argv(&req.worktree_path, &prompt);
         let cwd = req.worktree_path.clone();
         self.spawn(argv, cwd).await
     }
 
-    async fn spawn(
-        &self,
-        argv: Vec<String>,
-        cwd: PathBuf,
-    ) -> Result<CodexStream, ProcessError> {
+    async fn spawn(&self, argv: Vec<String>, cwd: PathBuf) -> Result<CodexStream, ProcessError> {
         // Codex requires stdin closed immediately or it prints
         // "Reading additional input from stdin..." and waits forever
         // (S2 finding #4). The runner closes the pipe synchronously when
@@ -307,8 +319,213 @@ impl CodexAdapter {
         let exit_watch = control.clone();
         tokio::spawn(parser_task(lines, tx, exit_watch));
 
-        Ok(CodexStream { control, events: rx })
+        Ok(CodexStream {
+            control,
+            events: rx,
+        })
     }
+}
+
+fn validate_moa_mutation_worktree(repo_root: &Path, path: &Path) -> Result<(), ProcessError> {
+    if has_traversal_component(repo_root) || has_traversal_component(path) {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "path contains traversal component",
+        ));
+    }
+
+    let repo = canonicalize_existing(repo_root).map_err(|e| {
+        mutation_worktree_denied(
+            repo_root,
+            path,
+            &format!("repo root is not canonicalizable: {e}"),
+        )
+    })?;
+    let repo_top_level = canonical_git_top_level(&repo).map_err(|e| {
+        mutation_worktree_denied(
+            repo_root,
+            path,
+            &format!("repo root git top-level check failed: {e}"),
+        )
+    })?;
+    if !same_path(&repo, &repo_top_level) {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "repo root is not the git top-level",
+        ));
+    }
+
+    let expected_parent_raw = repo.join(".moa-desktop").join("worktrees");
+    let expected_parent = canonicalize_existing(&expected_parent_raw).map_err(|e| {
+        mutation_worktree_denied(
+            repo_root,
+            path,
+            &format!("repo-local worktree parent is not canonicalizable: {e}"),
+        )
+    })?;
+    if !same_path(&expected_parent, &expected_parent_raw) {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "repo-local worktree parent must be the literal .moa-desktop/worktrees directory, not a reparse/junction alias",
+        ));
+    }
+    if !path_is_within_or_equal(&expected_parent, &repo) {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "repo-local worktree parent escapes the git top-level",
+        ));
+    }
+
+    let worktree = canonicalize_existing(path).map_err(|e| {
+        mutation_worktree_denied(
+            repo_root,
+            path,
+            &format!("mutation worktree is not canonicalizable: {e}"),
+        )
+    })?;
+    if !path_is_within_or_equal(&worktree, &repo) {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "mutation worktree escapes the git top-level",
+        ));
+    }
+
+    if !worktree.is_dir() {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "mutation worktree is not a directory",
+        ));
+    }
+
+    let Some(parent) = worktree.parent() else {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "mutation worktree has no parent",
+        ));
+    };
+    if !same_path(parent, &expected_parent) || worktree.file_name().is_none() {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "mutation worktree is not a direct child of repo-local .moa-desktop/worktrees",
+        ));
+    }
+
+    let top_level = git_output(&worktree, &["rev-parse", "--show-toplevel"]).map_err(|e| {
+        mutation_worktree_denied(
+            repo_root,
+            path,
+            &format!("git top-level check failed for mutation worktree: {e}"),
+        )
+    })?;
+    let top_level = canonicalize_existing(Path::new(top_level.trim())).map_err(|e| {
+        mutation_worktree_denied(
+            repo_root,
+            path,
+            &format!("git top-level is not canonicalizable: {e}"),
+        )
+    })?;
+    if !same_path(&top_level, &worktree) {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "mutation worktree path is not the git repository top-level",
+        ));
+    }
+
+    let worktree_list = git_output(&repo, &["worktree", "list", "--porcelain"]).map_err(|e| {
+        mutation_worktree_denied(
+            repo_root,
+            path,
+            &format!("git worktree list failed for repo root: {e}"),
+        )
+    })?;
+    let registered = worktree_list
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(|listed| canonicalize_existing(Path::new(listed)).ok())
+        .any(|listed| same_path(&listed, &worktree));
+
+    if !registered {
+        return Err(mutation_worktree_denied(
+            repo_root,
+            path,
+            "mutation worktree is not registered in git worktree list for repo root",
+        ));
+    }
+
+    Ok(())
+}
+
+fn canonicalize_existing(path: &Path) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path).or_else(|_| std::fs::canonicalize(path))
+}
+
+fn canonical_git_top_level(cwd: &Path) -> std::io::Result<PathBuf> {
+    let top_level = git_output(cwd, &["rev-parse", "--show-toplevel"])?;
+    canonicalize_existing(Path::new(top_level.trim()))
+}
+
+fn git_output(cwd: &Path, args: &[&str]) -> std::io::Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .output()?;
+
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
+fn path_is_within_or_equal(path: &Path, parent: &Path) -> bool {
+    path.ancestors().any(|ancestor| same_path(ancestor, parent))
+}
+
+fn mutation_worktree_denied(repo_root: &Path, path: &Path, reason: &str) -> ProcessError {
+    ProcessError {
+        kind: ProcessErrorKind::PermissionDenied,
+        message: format!(
+            "refusing Codex bypass mutation outside registered repo-local {}/.moa-desktop/worktrees/<sid>: {} ({reason})",
+            repo_root.display(),
+            path.display(),
+        ),
+        exit_code: None,
+        stderr_tail: String::new(),
+    }
+}
+
+fn has_traversal_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    })
 }
 
 async fn parser_task(
@@ -408,10 +625,7 @@ fn parse_stdout_line(line: &str, failed: &mut bool) -> CodexEvent {
                 .and_then(|e| e.get("message"))
                 .and_then(|s| s.as_str())
                 .map(str::to_string);
-            CodexEvent::TurnFailed {
-                error_message,
-                raw,
-            }
+            CodexEvent::TurnFailed { error_message, raw }
         }
         "error" => {
             *failed = true;
@@ -507,8 +721,10 @@ mod unit {
 
     #[test]
     fn mutation_argv_swaps_to_dangerous_bypass_and_drops_sandbox_flag() {
-        let a = CodexAdapter::new(fake_runner(), cfg())
-            .mutation_argv(Path::new("C:/wt"), "PROMPT");
+        let a = CodexAdapter::new(fake_runner(), cfg()).mutation_argv(
+            Path::new("C:/repo/.moa-desktop/worktrees/session-1"),
+            "PROMPT",
+        );
         assert!(a
             .iter()
             .any(|s| s == "--dangerously-bypass-approvals-and-sandbox"));
@@ -519,8 +735,21 @@ mod unit {
             "mutation argv must not carry --sandbox"
         );
         let i = a.iter().position(|s| s == "--cd").unwrap();
-        assert_eq!(a[i + 1], "C:/wt");
+        assert_eq!(a[i + 1], "C:/repo/.moa-desktop/worktrees/session-1");
         assert_eq!(a.last().unwrap(), "PROMPT");
+    }
+
+    #[test]
+    fn mutation_worktree_guard_rejects_traversal_components() {
+        assert!(has_traversal_component(Path::new(
+            "C:/repo/.moa-desktop/worktrees/../session-1"
+        )));
+        assert!(has_traversal_component(Path::new(
+            "./.moa-desktop/worktrees/session-1"
+        )));
+        assert!(!has_traversal_component(Path::new(
+            "C:/repo/.moa-desktop/worktrees/session-1"
+        )));
     }
 
     #[test]
@@ -543,6 +772,7 @@ mod unit {
         let a = CodexAdapter::new(fake_runner(), cfg());
         let p = a.render_mutation_prompt(&MutationRequest {
             task: "refactor".into(),
+            repo_root: PathBuf::from("/tmp/repo"),
             worktree_path: PathBuf::from("/tmp/wt"),
         });
         assert!(p.starts_with("GUARD"));

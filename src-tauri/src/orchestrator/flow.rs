@@ -79,8 +79,7 @@ pub fn classify(input: &ClassifyInput) -> Flow {
     if single_file && short_task && trivial_word {
         // Mechanical edits or Windows shell tasks bias toward Flow B
         // (Codex-author strength).
-        let mechanical_markers: &[&str] =
-            &["powershell", "windows", "batch", "regex", "sed-like"];
+        let mechanical_markers: &[&str] = &["powershell", "windows", "batch", "regex", "sed-like"];
         if mechanical_markers.iter().any(|m| task_lc.contains(m)) {
             return Flow::B;
         }

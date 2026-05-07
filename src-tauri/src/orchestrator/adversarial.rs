@@ -52,12 +52,7 @@ END_SYNTHESIS_JSON
 
 /// Build the adversarial-review prompt body. Caller passes synthesis result
 /// already serialized to JSON (the T3 deterministic merge output).
-pub fn render_prompt(
-    task: &str,
-    synthesis_json: &str,
-    round: u32,
-    max_rounds: u32,
-) -> String {
+pub fn render_prompt(task: &str, synthesis_json: &str, round: u32, max_rounds: u32) -> String {
     TEMPLATE
         .replace("{{task}}", task)
         .replace("{{synthesis_json}}", synthesis_json)
@@ -122,7 +117,9 @@ pub fn decide(verdict: Verdict, round: u32, max_rounds: u32) -> AdversarialDecis
             if round >= max_rounds {
                 AdversarialDecision::EscalateBlocker { round }
             } else {
-                AdversarialDecision::Retry { next_round: round + 1 }
+                AdversarialDecision::Retry {
+                    next_round: round + 1,
+                }
             }
         }
     }

@@ -84,11 +84,19 @@ Windows shell, sandbox, 대량 mechanical edit. Codex가 작성, Claude가 spot 
 ### Codex Worker:
 - You are Codex Worker in MoA Desktop. Independent peer, not orchestrator.
 - Do NOT call Claude. Do NOT run claude.
-- Do NOT call Claude MCP, claude_code_peer, TeamCreate, Agent.
+- Do NOT run nested Codex (`codex exec`, `/codex:*`) from inside the worker.
+- Do NOT call Claude MCP, Codex MCP, claude_code_peer, TeamCreate, Agent.
 - If peer needed, write `NEED_PEER_REVIEW` and stop.
 
-## Output Scanner (block list)
-- `/codex:`, `claude -p`, `claude_code_peer`, `Claude MCP`, `Codex MCP`
+### Review Gate Owner:
+- Mandatory `CodexAdversarialXHigh` review gates are lead/orchestrator-owned, never worker-owned. In the app this means source=orchestrator ReviewProfile. During Codex Desktop manual development, a user-requested lead PowerShell `codex exec --ephemeral --sandbox read-only ... --output-last-message <repo>/.moa-desktop/reviews/<stamp>.md` review is allowed and must be recorded as review evidence. `--dangerously-bypass-approvals-and-sandbox` is mutation-in-worktree only, not review-gate evidence.
+
+## WorkerCommandGuard + Output Scanner
+
+`WorkerCommandGuard` / `SpawnGuard` is the primary defense: source=worker process/tool execution is blocked before spawn if argv or shell text attempts peer recursion. Output scanner is the second defense for streamed text and final UI display.
+
+### Block list
+- `/codex:`, `codex exec`, `claude -p`, `claude_code_peer`, `Claude MCP`, `Codex MCP`
 - `TeamCreate`, `Agent`, `call Codex`, `call Claude`, `ask another AI`, `run another agent`
 
 ## Claude Command Adapter
@@ -119,15 +127,15 @@ claude -p <prompt>
 ## Codex Command Adapter (configurable) — codex-cli 0.128.0 검증
 Default template (read-only first-pass):
 ```
-codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true \
+codex exec --ephemeral -c model_reasoning_effort='high' -c 'web_search="live"' \
   --sandbox read-only --json --cd <repo> <prompt>
 ```
 Mutation template (lock owner=codex 일 때만):
 ```
-codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true \
+codex exec --ephemeral -c model_reasoning_effort='high' -c 'web_search="live"' \
   --dangerously-bypass-approvals-and-sandbox --json --cd <worktree> <prompt>
 ```
-- ⚠️ Windows S2 finding #5: `--sandbox workspace-write` is BROKEN on Windows (codex command-policy rejects PowerShell writes with `blocked by policy`). Mutation MUST use `--dangerously-bypass-approvals-and-sandbox` inside an **isolated worktree** (under `~/.moa-desktop/worktrees/`) — orchestrator T4 lock + git worktree are the safety boundary, not the codex sandbox. Source of truth: `src-tauri/src/adapters/codex.rs::mutation_argv`.
+- ⚠️ Windows S2 finding #5: `--sandbox workspace-write` is BROKEN on Windows (codex command-policy rejects PowerShell writes with `blocked by policy`). Mutation MUST use `--dangerously-bypass-approvals-and-sandbox` inside an **isolated repo-local worktree** (`<repo>/.moa-desktop/worktrees/<session-id>/`) — orchestrator T4 lock + git worktree + adapter worktree-path guard are the safety boundary, not the codex sandbox. Source of truth: `src-tauri/src/adapters/codex.rs::mutation_argv`.
 - ❌ `--reasoning-effort` 직접 flag 는 unsupported (`error: unexpected argument`)
 - 6 항목 의무: success criteria, NEVER 영역, validation cmds, files+lines, alternatives 2개, tests-first
 - mutation: lock owner=codex 일 때만, 최신 re-read + diff checkpoint 후
@@ -138,11 +146,13 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true
 {
   "moaDefault": true,
   "defaultFlow": "auto",
+  "primaryRole": "claude",
+  "_primaryRoleNote": "claude|codex. Codex 선택 시 synthesizer/default reviewer/Flow-C mutation owner 기본값까지 Codex 로 스왑하되 Claude 는 sibling worker 로 유지. 진행 중 세션에는 영향 없고 다음 세션부터 적용.",
   "maxRounds": 3,
   "mutationPolicy": "single-owner-with-transfer",
   "sameFileSequentialEdit": true,
   "claude": {"enabled": true, "command": "claude", "model": "opus", "maxTurns": 20, "allowWeb": true, "allowEditWhenOwner": true},
-  "codex": {"enabled": true, "commandTemplate": "codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true --sandbox {{sandboxMode}} --json --cd {{cwd}} {{prompt}}", "_commandTemplateNote": "read-only first-pass 전용 template ({{sandboxMode}}=read-only). Mutation 은 별도 빌더 (`src-tauri/src/adapters/codex.rs::mutation_argv`) — `--sandbox` 제거 + `--dangerously-bypass-approvals-and-sandbox` 추가, isolated worktree 안 (Windows S2 #5).", "allowWeb": true, "allowEditWhenOwner": true},
+  "codex": {"enabled": true, "commandTemplate": "codex exec --ephemeral -c model_reasoning_effort='high' -c web_search=\"live\" --sandbox {{sandboxMode}} --json --cd {{cwd}} {{prompt}}", "_commandTemplateNote": "read-only first-pass 전용 template ({{sandboxMode}}=read-only). Mutation 은 별도 빌더 (`src-tauri/src/adapters/codex.rs::mutation_argv`) — `--sandbox` 제거 + `--dangerously-bypass-approvals-and-sandbox` 추가, isolated worktree 안 (Windows S2 #5).", "allowWeb": true, "allowEditWhenOwner": true},
   "safety": {"blockPeerRecursion": true, "blockSecrets": true, "requireGitCheckpoint": true, "stopOnTestFailure": true}
 }
 ```
@@ -199,8 +209,10 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true
 - Claude/Codex lane 독립 실행
 - Claude prompt에 "Do not call Codex" 포함
 - Codex prompt에 "Do not call Claude" 포함
-- output scanner가 `/codex:` Claude 출력에서 차단
-- output scanner가 `claude -p` Codex 출력에서 차단
+- command guard가 worker-source `/codex:`, `codex exec`, `claude -p` 실행 시도를 spawn/tool execution 전에 차단
+- command guard가 worker-source Claude/Codex MCP, `TeamCreate`, `Agent` 실행 시도를 spawn/tool execution 전에 차단
+- output scanner가 `/codex:` Claude 출력에서 2차 차단
+- output scanner가 `claude -p` Codex 출력에서 2차 차단
 - first-pass = read-only
 - mutation = 정확히 1 owner
 - same-file 순차 = lock transfer 필요

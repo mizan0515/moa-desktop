@@ -15,9 +15,19 @@ use tokio::time::timeout;
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum VerifyOutcome {
     Skipped,
-    Passed { duration_ms: u128, stdout_tail: String },
-    Failed { exit_code: Option<i32>, duration_ms: u128, stdout_tail: String, stderr_tail: String },
-    TimedOut { after_secs: u64 },
+    Passed {
+        duration_ms: u128,
+        stdout_tail: String,
+    },
+    Failed {
+        exit_code: Option<i32>,
+        duration_ms: u128,
+        stdout_tail: String,
+        stderr_tail: String,
+    },
+    TimedOut {
+        after_secs: u64,
+    },
 }
 
 impl VerifyOutcome {
@@ -108,7 +118,10 @@ pub async fn run(spec: VerifySpec) -> VerifyOutcome {
     let stderr_tail = tail(&stderr, spec.tail_chars);
 
     if output.status.success() {
-        VerifyOutcome::Passed { duration_ms: dur_ms, stdout_tail }
+        VerifyOutcome::Passed {
+            duration_ms: dur_ms,
+            stdout_tail,
+        }
     } else {
         VerifyOutcome::Failed {
             exit_code: output.status.code(),
@@ -139,14 +152,22 @@ mod tests {
 
     #[tokio::test]
     async fn passes_on_zero_exit() {
-        let cmd = if cfg!(windows) { "cmd /C exit 0" } else { "true" };
+        let cmd = if cfg!(windows) {
+            "cmd /C exit 0"
+        } else {
+            "true"
+        };
         let out = run(VerifySpec::new(".").with_command(cmd)).await;
         assert!(out.is_ok(), "expected Passed, got {out:?}");
     }
 
     #[tokio::test]
     async fn fails_on_non_zero() {
-        let cmd = if cfg!(windows) { "cmd /C exit 1" } else { "false" };
+        let cmd = if cfg!(windows) {
+            "cmd /C exit 1"
+        } else {
+            "false"
+        };
         let out = run(VerifySpec::new(".").with_command(cmd)).await;
         assert!(matches!(out, VerifyOutcome::Failed { .. }));
     }
@@ -160,11 +181,9 @@ mod tests {
         } else {
             "sleep 5"
         };
-        let out = run(
-            VerifySpec::new(".")
-                .with_command(cmd)
-                .with_timeout(Duration::from_millis(150)),
-        )
+        let out = run(VerifySpec::new(".")
+            .with_command(cmd)
+            .with_timeout(Duration::from_millis(150)))
         .await;
         assert!(matches!(out, VerifyOutcome::TimedOut { .. }));
     }

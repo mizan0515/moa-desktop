@@ -1,9 +1,11 @@
-# T0 — De-risk spike (1주, 단독 실행)
+# T0 — De-risk spike (historical/closed, do not reuse as active worker prompt)
+
+> Status: historical. 이 파일은 초기 spike 기록으로 보존한다. 현재 정책에서는 worker context 에서 `claude -p`, `codex exec`, `/codex:*`, Claude/Codex MCP 를 직접 실행하는 prompt 로 재사용하면 안 된다. 새 검증이 필요하면 lead/orchestrator-owned local verification ticket 으로 다시 작성한다.
 
 ## 새 Claude 창 만들기 가이드
-1. 새 Claude Code 창 열기 (작업 폴더: `D:\moa-desktop`)
-2. worktree 사용 안 함 (이 ticket 은 spike 결과만 만드는 거라 main repo 에서 직접 작업해도 OK)
-3. 첫 입력으로 아래 프롬프트 통째 (Ctrl+V) 붙여넣기
+1. 아래 내용은 과거 기록이다.
+2. 현재는 main repo 직접 mutation 금지. mutation 은 isolated worktree 에서만 수행한다.
+3. 아래 paste-ready 프롬프트는 active worker prompt 로 사용하지 않는다.
 
 ---
 
@@ -30,7 +32,7 @@ PLAN.md § F5 의 spike S1-S8 8개 모두 검증. 하나라도 FAIL 이면 alter
 
 ## Success criteria (verifiable)
 - [ ] S1: `claude -p` 를 Node 스크립트에서 spawn → stdout JSONL 라인 단위 수신 → kill 시 child 즉시 종료, 잔존 PID 0
-- [ ] S2: 사용자 사전 검증 완료 (2026-05-06, codex-cli 0.128.0). 확정 명령: `codex exec --ephemeral -c model_reasoning_effort='high' -c tools.web_search=true --sandbox read-only --json --cd <repo> <prompt>`. 본 spike 에서 추가 검증: read-only 가 실제 mutation 시도를 차단하는지 (touch/echo > file 시도해서 deny 확인) + workspace-write 모드에서 mutation 정상
+- [ ] S2: 사용자 사전 검증 완료 (2026-05-06, codex-cli 0.128.0; #19 resolved). 현재 adapter source of truth 는 read-only first-pass `codex exec --ephemeral -c model_reasoning_effort="high" -c web_search="live" --sandbox read-only --json --cd <repo> <prompt>` 와 Windows mutation `--dangerously-bypass-approvals-and-sandbox` inside isolated worktree (`src-tauri/src/adapters/codex.rs::mutation_argv`) 이다. worker 가 이 명령을 직접 호출하는 prompt 로 재사용하지 않는다.
 - [ ] S3: 두 Worker 병렬 실행 시 stdout 충돌 없음, 메모리/파일 race 없음
 - [ ] S4: Claude `--disallowedTools "mcp__*"` 가 Codex MCP 호출 실제 차단하는지 (worker 가 `/codex:rescue` 시도하는 fake prompt 로 검증). 안 되면 plugin env 분리 fallback 정의
 - [ ] S5: Tauri spawn 자식이 `~/.claude/credentials.json`, `~/.codex/auth.json` 자동 사용 — 별도 env 주입 없이
