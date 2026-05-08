@@ -1480,13 +1480,6 @@ async fn run_mutation_phase(
         None,
     );
 
-    if owner == Lane::Codex && !start.mock_mode {
-        return Err(
-            "codex mutation blocked: bypass mode needs a worker-source pre-execution command broker"
-                .into(),
-        );
-    }
-
     let repo_root = git_top_level(&start.cwd).map_err(|e| format!("resolve git top-level: {e}"))?;
 
     // T4 lock acquire — Repo → Project → Lane chain.
