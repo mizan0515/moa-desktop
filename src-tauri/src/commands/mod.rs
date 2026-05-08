@@ -1,10 +1,49 @@
 //! T13 L4 — privileged slash command registry.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+
 use serde::{Deserialize, Serialize};
 
 use crate::policy::review::{ReviewGate, ReviewRunRecord};
 use crate::policy::PrimaryRole;
 use crate::safety::{scan_text, RoleContext, ScanResult, ScanSource};
+
+static REVIEW_STORE: OnceLock<Mutex<HashMap<String, ReviewRunRecord>>> = OnceLock::new();
+static REVIEW_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn review_store() -> &'static Mutex<HashMap<String, ReviewRunRecord>> {
+    REVIEW_STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn remember_review_run(record: ReviewRunRecord) -> Result<String, String> {
+    if !record.is_gate_complete() {
+        return Err("review run is not complete".into());
+    }
+    let id = REVIEW_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let token = format!("review-run-{id}");
+    review_store()
+        .lock()
+        .map_err(|_| "review store poisoned".to_string())?
+        .insert(token.clone(), record);
+    Ok(token)
+}
+
+fn review_records_for_tokens(tokens: &[String]) -> Result<Vec<ReviewRunRecord>, String> {
+    let store = review_store()
+        .lock()
+        .map_err(|_| "review store poisoned".to_string())?;
+    tokens
+        .iter()
+        .map(|token| {
+            store
+                .get(token)
+                .cloned()
+                .ok_or_else(|| format!("unknown review token: {token}"))
+        })
+        .collect()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -192,9 +231,10 @@ pub fn slash_confirm_step_with_review(
     preview: DispatchPreview,
     step_index: usize,
     user_confirmed: bool,
-    review_records: Vec<ReviewRunRecord>,
+    review_tokens: Vec<String>,
     review_context: SlashReviewContext,
 ) -> Result<bool, String> {
+    let review_records = review_records_for_tokens(&review_tokens)?;
     confirm_step_allowed(
         &preview,
         step_index,
@@ -357,11 +397,25 @@ mod tests {
         let output_path = td.path().join("review.md");
         std::fs::write(&output_path, "Verdict: Clean\nok").unwrap();
         let record = complete_review_record(output_path, ReviewGate::PrCreate);
+        let token = remember_review_run(record).unwrap();
         let preview = dispatch_preview("/메인동기화").unwrap();
         assert!(
-            slash_confirm_step_with_review(preview, 1, true, vec![record], review_context())
+            slash_confirm_step_with_review(preview, 1, true, vec![token], review_context())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn tauri_confirm_with_review_rejects_unknown_token() {
+        let preview = dispatch_preview("/메인동기화").unwrap();
+        assert!(slash_confirm_step_with_review(
+            preview,
+            1,
+            true,
+            vec!["forged-token".into()],
+            review_context(),
+        )
+        .is_err());
     }
 
     #[test]

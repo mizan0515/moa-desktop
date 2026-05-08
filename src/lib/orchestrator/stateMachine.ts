@@ -74,6 +74,7 @@ export interface OrchSession {
   lastVerdict?: string;
   /// Final report payload, if present.
   finalPayload?: unknown;
+  safetyViolation?: boolean;
   /// User-facing log strings for the workbench transcript.
   log: string[];
 }
@@ -184,6 +185,7 @@ async function onEvent(ev: OrchEvent): Promise<void> {
       const payload = (ev.payload ?? {}) as { evidence?: string; violation_kind?: string };
       const reason = payload.evidence ?? payload.violation_kind ?? "policy violation";
       s.log.push(`! safety violation: ${reason}`);
+      s.safetyViolation = true;
       s.state = { kind: "failed", message: `safety violation: ${reason}` };
       break;
     }
@@ -204,7 +206,9 @@ async function onEvent(ev: OrchEvent): Promise<void> {
     }
     case "session_cancelled": {
       s.log.push(`◼ cancelled`);
-      s.state = { kind: "cancelled" };
+      if (!s.safetyViolation) {
+        s.state = { kind: "cancelled" };
+      }
       break;
     }
     case "worktree_created":

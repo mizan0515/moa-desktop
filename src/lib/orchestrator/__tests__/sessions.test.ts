@@ -188,6 +188,12 @@ describe("orchStart event ordering + sid collision (FIX-C)", () => {
       kind: "safety_violation",
       payload: { evidence: "codex exec" },
     });
+    emitFromBackend({
+      session_id: sid,
+      phase: "final",
+      lane: "system",
+      kind: "session_cancelled",
+    });
     await Promise.resolve();
     const session = orchStore.getSnapshot().sessions[sid];
     expect(session.state.kind).toBe("failed");
