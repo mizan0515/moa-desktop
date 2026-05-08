@@ -258,6 +258,7 @@ export interface OrchStartArgs {
   overrideFlow?: Flow;
   mockMode?: boolean;
   verifyCmd?: string;
+  primaryRole?: "claude" | "codex";
 }
 
 export const orchStore = {
@@ -278,6 +279,7 @@ export const orchStore = {
 
 export async function orchStart(args: OrchStartArgs): Promise<string> {
   await ensureSubscribed();
+  const primaryRole = args.primaryRole ?? readPrimaryRoleSetting();
   const sid = await invoke<string>("orch_start", {
     start: {
       task: args.task,
@@ -287,6 +289,7 @@ export async function orchStart(args: OrchStartArgs): Promise<string> {
       override_flow: args.overrideFlow,
       mock_mode: args.mockMode ?? false,
       verify_cmd: args.verifyCmd,
+      primary_role: primaryRole,
     },
   });
   // FIX-C — register the session in our store BEFORE telling the backend
@@ -299,6 +302,18 @@ export async function orchStart(args: OrchStartArgs): Promise<string> {
   notify();
   await invoke("orch_ack", { sessionId: sid });
   return sid;
+}
+
+function readPrimaryRoleSetting(): "claude" | "codex" {
+  if (typeof window === "undefined") return "claude";
+  try {
+    const raw = window.localStorage.getItem("moa.settings");
+    if (!raw) return "claude";
+    const parsed = JSON.parse(raw) as { primaryRole?: unknown };
+    return parsed.primaryRole === "codex" ? "codex" : "claude";
+  } catch {
+    return "claude";
+  }
 }
 
 export async function orchCancel(sessionId: string): Promise<boolean> {

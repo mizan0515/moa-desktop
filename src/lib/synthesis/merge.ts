@@ -266,12 +266,14 @@ export function appendAttempt(prev: WorkerOutput, next: WorkerOutput): WorkerOut
 }
 
 /** Synthesize Claude × Codex worker outputs into the 5-column schema. */
-export function synthesize(claude: WorkerOutput, codex: WorkerOutput): SynthesisData {
-  if (claude.worker !== "claude") {
-    throw new Error(`synthesize: first arg must be claude worker (got ${claude.worker})`);
-  }
-  if (codex.worker !== "codex") {
-    throw new Error(`synthesize: second arg must be codex worker (got ${codex.worker})`);
+export function synthesize(left: WorkerOutput, right: WorkerOutput): SynthesisData {
+  const pair = [left, right];
+  const claude = pair.find((w) => w.worker === "claude");
+  const codex = pair.find((w) => w.worker === "codex");
+  if (!claude || !codex) {
+    throw new Error(
+      `synthesize: requires one claude and one codex worker (got ${left.worker}, ${right.worker})`,
+    );
   }
   const out: SynthesisData = {
     verified: [],

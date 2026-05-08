@@ -176,6 +176,12 @@ describe("synthesize — empty inputs", () => {
     expect(out.disagreement).toHaveLength(0);
     expect(out.open).toHaveLength(0);
   });
+
+  it("accepts Codex-first input order for PrimaryRole=Codex sessions", () => {
+    const out = synthesize(codexWith([]), claudeWith([]));
+    expect(out.verified).toHaveLength(0);
+    expect(out.open).toHaveLength(0);
+  });
 });
 
 describe("parseWorkerNdjson", () => {

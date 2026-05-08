@@ -5,14 +5,17 @@ use tauri::Manager;
 
 pub mod adapters;
 pub mod cancel;
+pub mod commands;
 pub mod decomposer;
 pub mod git;
 pub mod integrator;
 pub mod journal;
+pub mod lifecycle;
 pub mod lock;
 pub mod mock;
 pub mod orchestrator;
 pub mod parallel;
+pub mod policy;
 pub mod process;
 pub mod safety;
 pub mod settings;
@@ -63,6 +66,13 @@ pub fn run() {
             orchestrator::orch_submit_synthesis,
             orchestrator::orch_confirm_mutation,
             orchestrator::orch_get_state,
+            settings::settings_load,
+            settings::settings_save,
+            commands::slash_dispatch_preview,
+            commands::slash_confirm_step,
+            safety::command_guard::worker_command_guard_check,
+            lifecycle::export_resume_packet,
+            lifecycle::import_resume_packet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -73,18 +83,18 @@ pub fn run() {
 /// error instead of crashing app startup.
 fn build_orch_deps() -> Option<orchestrator::OrchestrationDeps> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest.parent().map(|p| p.to_path_buf()).unwrap_or(manifest);
+    let repo_root = manifest
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or(manifest);
     let prompts_dir = repo_root.join("prompts").join("workers");
 
     let claude_program = util::which::which("claude").unwrap_or_else(|| PathBuf::from("claude"));
     let codex_program = util::which::which("codex").unwrap_or_else(|| PathBuf::from("codex"));
 
-    let claude_config = adapters::claude::ClaudeConfig::from_dir(
-        claude_program,
-        &prompts_dir,
-        "claude-opus-4-7",
-    )
-    .ok()?;
+    let claude_config =
+        adapters::claude::ClaudeConfig::from_dir(claude_program, &prompts_dir, "claude-opus-4-7")
+            .ok()?;
     let codex_home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .or_else(|| dirs_home().map(|h| h.join(".codex")))
@@ -92,13 +102,13 @@ fn build_orch_deps() -> Option<orchestrator::OrchestrationDeps> {
     let codex_config =
         adapters::codex::CodexConfig::from_dir(codex_program, &prompts_dir, codex_home).ok()?;
 
-    let real_runner: Arc<dyn process::ProcessRunner> =
-        Arc::new(process::TokioProcessRunner::new());
+    let real_runner: Arc<dyn process::ProcessRunner> = Arc::new(process::TokioProcessRunner::new());
     // Default mock runner targets a no-op file; real mock_mode picks per-task
     // files in the orchestrator. T8 §B: passing a missing path makes the
     // runner emit zero lines and exit 0, which is the desired no-op default.
-    let mock_runner: Arc<dyn process::ProcessRunner> =
-        Arc::new(mock::MockRunner::new(repo_root.join("mockResponses").join("noop.json")));
+    let mock_runner: Arc<dyn process::ProcessRunner> = Arc::new(mock::MockRunner::new(
+        repo_root.join("mockResponses").join("noop.json"),
+    ));
 
     // FIX-F — journal base dir defaults to `~/.moa-desktop`. Falls back to
     // a process-local temp subdir if HOME is unresolvable so tests / CI
@@ -124,4 +134,3 @@ fn dirs_home() -> Option<PathBuf> {
         std::env::var_os("HOME").map(PathBuf::from)
     }
 }
-

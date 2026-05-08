@@ -31,6 +31,7 @@ const listeners: Listener[] = [];
 let sidCounter = 0;
 let invokeCalls: Array<{ cmd: string; args: InvokeArgs; sidAtCall?: string }> = [];
 let storeSnapshot: () => Record<string, unknown> = () => ({});
+const localStorageMemory = new Map<string, string>();
 
 function emitFromBackend(payload: unknown): void {
   for (const l of listeners) l.cb({ payload });
@@ -93,6 +94,14 @@ describe("orchStart event ordering + sid collision (FIX-C)", () => {
     listeners.length = 0;
     invokeCalls = [];
     sidCounter = 0;
+    localStorageMemory.clear();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => localStorageMemory.get(key) ?? null,
+        setItem: (key: string, value: string) => localStorageMemory.set(key, value),
+        clear: () => localStorageMemory.clear(),
+      },
+    });
     const mod = await import("../stateMachine");
     mod.__resetForTests();
     storeSnapshot = () => mod.orchStore.getSnapshot().sessions;
@@ -100,6 +109,7 @@ describe("orchStart event ordering + sid collision (FIX-C)", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("creates 100 distinct sessions under concurrent starts", async () => {
@@ -124,6 +134,15 @@ describe("orchStart event ordering + sid collision (FIX-C)", () => {
     const ack = invokeCalls.find((c) => c.cmd === "orch_ack");
     expect(ack).toBeDefined();
     expect(ack?.sidAtCall).toBe("present");
+  });
+
+  it("passes saved primary role into backend start args", async () => {
+    localStorageMemory.set("moa.settings", JSON.stringify({ primaryRole: "codex" }));
+    const { orchStart } = await import("../stateMachine");
+    await orchStart({ task: "t", cwd: "/tmp", projectId: "p" });
+    const startCall = invokeCalls.find((c) => c.cmd === "orch_start");
+    const start = (startCall?.args as { start?: { primary_role?: string } } | undefined)?.start;
+    expect(start?.primary_role).toBe("codex");
   });
 
   it("invokes orch_ack exactly once per started session", async () => {
