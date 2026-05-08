@@ -2,69 +2,66 @@
 
 GitHub: #36 (https://github.com/mizan0515/moa-desktop/issues/36)
 
-## 배경
-
-Pi 는 "아이디어 참고"가 아니라 MoA Desktop 안에 들어오는 세 번째 harness runtime 이다. 단, MoA 의 핵심 경계는 유지한다: Claude Worker 와 Codex Worker 는 sibling worker 이고, Pi 역시 worker 내부 peer-call 이 아니라 MoA parent orchestrator 가 소유하는 `HarnessRuntime` 이다. Pi package/extension/custom UI/hot reload 는 T13 policy/safety gate 아래에서만 활성화한다.
-
-확인 근거(2026-05-08):
-- `@earendil-works/pi-coding-agent` npm 최신: `0.74.0`
-- deprecated: `@mariozechner/pi-coding-agent@0.73.1` 는 `@earendil-works/pi-coding-agent` 사용을 안내
-- `earendil-works/pi` HEAD: `783e96a14431e9cb33299d8c5e162cc5ad6e7c69`
-- Pi RPC docs: `pi --mode rpc` 는 stdin/stdout JSONL headless protocol
-- Pi SDK docs: `createAgentSession()`, `DefaultResourceLoader`, `createEventBus`, `ModelRegistry`, `SessionManager`
-- Pi packages docs: packages/extensions 는 full system access 위험이 있으므로 source review, pin, hash, capability manifest 필요
-
-## 의존성
-
-- 선행: T13 L1-L5. 특히 `WorkerCommandGuard`, `ReviewRunRecord`, `ResumePacket`, command permission class 가 필요하다.
-- T15a -> T15b -> T15c -> T15d/T15e/T15f/T15g.
-- T10/T11/T12/T14 는 `runtimeKind: "claude" | "codex" | "pi"` 를 소비하도록 amend 한다.
-
 ## Goal
 
-MoA Desktop 이 Claude/Codex/Pi runtime 을 같은 parent orchestrator 아래에서 다룬다. Pi lane 은 초기에는 read-only/research/reviewer/conversational 용도로만 허용하고, mutation owner 승격은 T15g 이후 별도 opt-in setting 으로 미룬다.
+Pi 자체를 MoA Desktop parent-owned third `HarnessRuntime` 으로 편입하는 백로그/설계 문서를 정리한다. 본 ticket 은 docs/backlog only 이며 production code 를 수정하지 않는다.
 
-## Architecture
+## Decision
+
+Pi 는 Claude/Codex worker 내부 tool 이 아니고, MoA parent orchestrator 가 소유하는 sibling harness runtime 이다.
 
 ```text
 MoA Parent Orchestrator
   ├─ ClaudeRuntimeAdapter
   ├─ CodexRuntimeAdapter
   └─ PiRuntimeAdapter
-       ├─ PiRpcAdapter: pi --mode rpc JSONL
+       ├─ PiRpcAdapter: pi --mode rpc --no-session JSONL
        └─ PiSdkHost: sidecars/moa-pi-host using @earendil-works/pi-coding-agent
 ```
 
-Pi extension 은 MoA orchestrator 위에 설 수 없다. tool call, package install, hot reload, custom UI request 는 모두 MoA policy gate 를 지나야 한다.
+선택지는 RPC only, SDK only, RPC MVP -> SDK sidecar 였고, 선택은 RPC MVP -> SDK sidecar 다. 빠른 lane integration 을 먼저 얻고 packages/extensions/custom UI/session tree 는 T13 policy boundary 아래에서 확장한다.
+
+## Verified metadata
+
+설치/업데이트 없이 2026-05-08 확인:
+- `@earendil-works/pi-coding-agent` npm latest: `0.74.0`.
+- `@mariozechner/pi-coding-agent` is deprecated and points to `@earendil-works/pi-coding-agent`.
+- `earendil-works/pi` remote HEAD: `3421726e8629d4cd344e75b94bdf9d7412dfddca`.
 
 ## Success criteria
 
 - [ ] `DESIGN.md` 에 Pi Runtime / Harness Runtime section 이 있고 parent-owned third runtime 임을 명시한다.
-- [ ] `PLAN.md` 에 T15/T15a-T15g/T16 phase 와 dependency graph 가 반영된다.
+- [ ] `PLAN.md` 에 T15/T15a-T15g/T15INTEGRATE/T16 phase 와 dependency graph 가 반영된다.
+- [ ] `PROJECT-RULES.md`/`AGENTS.md` 에 Pi invariant/latest status 가 반영된다.
 - [ ] T10/T11/T12/T14 가 Pi runtime 을 소비하는 amend section 을 가진다.
+- [ ] T15/T15a-T15g/T15INTEGRATE/T16 ticket files 가 존재한다.
 - [ ] 모든 T15 sub-ticket 이 6 항목 의무를 포함한다.
 - [ ] Pi lane initial permission 은 read-only/research/reviewer/conversational 로 제한된다.
 - [ ] mandatory `CodexAdversarialXHigh` gate 는 Pi review 로 대체되지 않는다.
-- [ ] Pi package install/update/hot reload 는 user confirm + pinned version + sha256 + capability manifest + mutation lock check 없이는 금지된다.
+- [ ] Pi package install/update/hot reload 는 user confirm + pinned source + sha256 + capability manifest + mutation lock check 없이는 금지된다.
+- [ ] production code 수정 0.
 
 ## Files owned
 
-- `DESIGN.md` Pi Runtime / Harness Runtime vision section
-- `PLAN.md` T15/T16 phase, dependency graph, final ticket list
-- `TICKETS/T15*.md`, `TICKETS/T16-harness-marketplace-equipment-profiles.md`
-
-## Read-only
-
-- `src-tauri/src/*`, `src/*`, `package.json`, `Cargo.toml`
-- T13 policy/safety implementation until actual T15 implementation tickets begin
+- `DESIGN.md`
+- `PLAN.md`
+- `PROJECT-RULES.md`
+- `AGENTS.md`
+- `TICKETS/T10-ticket-decomposer.md`
+- `TICKETS/T11-parallel-runner.md`
+- `TICKETS/T12-merge-integrator.md`
+- `TICKETS/T14-conversational-mode.md`
+- `TICKETS/T15*.md`
+- `TICKETS/T16-harness-marketplace-equipment-profiles.md`
 
 ## NEVER 영역
 
-- Pi 를 Claude/Codex worker 내부 tool 로 넣지 않는다.
-- Pi extension 이 `claude`, `codex exec`, `/codex:*`, Claude/Codex MCP, `TeamCreate`, `Agent` 를 직접 호출하게 하지 않는다.
-- `CodexAdversarialXHigh` 를 Pi review, Pi package, Pi extension 으로 대체하지 않는다.
-- Pi package 를 자동 설치/업데이트하지 않는다.
-- production code 구현은 T15 EPIC 문서 작업에서 하지 않는다.
+- `src-tauri/src/*`
+- `src/*`
+- `package.json`, `Cargo.toml`, lockfiles
+- Pi package install/update
+- Pi 를 worker nested peer-call 로 설명
+- `CodexAdversarialXHigh` 를 Pi review, Pi package, Pi extension 으로 대체
 
 ## Validation cmd
 
@@ -75,52 +72,18 @@ rg -n "pi install|pi update|/reload|full system access|mutation lock|capability 
 rg -n "worker.*(codex exec|claude -p|/codex:|Claude MCP|Codex MCP)" TICKETS DESIGN.md PLAN.md
 ```
 
-## Alternatives
+## Worker prompt 6 mandatory fields
 
-1. Pi RPC only
-   - Pros: fastest MVP, Tauri/Rust `ProcessRunner` 와 잘 맞고 격리가 쉽다.
-   - Cons: extension custom UI/custom renderer/package lifecycle 의 일부가 degraded 되거나 제한된다.
-2. Pi SDK Node sidecar only
-   - Pros: Pi 의 실제 강점인 extensions/packages/custom UI/session tree 를 처음부터 제어한다.
-   - Cons: Node sidecar packaging, signing, IPC, permission boundary 를 초반부터 모두 해결해야 한다.
-3. RPC MVP -> SDK sidecar 확장 (선택)
-   - Pros: 실제 Pi lane 을 빨리 붙이고, 위험한 package/extension 기능은 T13 gate 이후 확장한다.
-   - Cons: adapter 가 2단계로 진화하므로 capability mapping 과 migration test 가 필요하다.
+1. Success criteria: 위 Success criteria 전체, 특히 docs/tickets only 와 production code 0.
+2. NEVER 영역: production code, manifests/lockfiles, Pi install/update, nested peer-call, mandatory review gate relaxation.
+3. Validation cmd: 위 Validation cmd.
+4. Files + lines: `DESIGN.md` Harness Runtime/Pi section, `PLAN.md` § 0.7/Phase graph, T10/T11/T12/T14 amend sections.
+5. Alternatives 2개 + pros/cons + 선택 근거: RPC only(빠르지만 extension degraded), SDK only(기능 완전하지만 packaging/safety blast radius 큼), RPC MVP -> SDK sidecar(선택).
+6. Tests-first: docs ticket 이므로 failing code test 대신 validation rg/diff 를 먼저 정의하고 생산 코드 diff 0 을 검증한다.
 
-선택: C. MoA 의 safety boundary 를 유지하면서 Pi 를 가장 빨리 실사용 lane 으로 붙일 수 있다.
+## 작업 완료 시
 
-## Tests-first
-
-- T15a 는 smoke script/report 를 먼저 만든다.
-- T15b 는 JSONL framing/correlation/parser tests 를 먼저 실패시킨다.
-- T15c 는 sidecar IPC contract tests 를 먼저 실패시킨다.
-- T15d/e/f/g 는 capability denial tests 를 먼저 실패시킨다.
-
-## Paste-ready prompt
-
-```text
-[세션 부트]
-- Prompt kind: Codex Desktop manual lead ticket session
-- repo: D:\moa-desktop
-- base branch: master
-- 권장 분기: codex/T15-pi-runtime-epic
-- 작업 종류: 백로그/설계 문서 수정. production code 구현 금지.
-
-[Goal]
-Pi 자체를 MoA Desktop parent-owned third harness runtime 으로 편입하는 T15 EPIC 을 문서/티켓에 반영한다.
-
-[Success criteria]
-- DESIGN.md/PLAN.md/TICKETS 에 Pi Runtime EPIC 과 sub-ticket graph 반영
-- T10/T11/T12/T14 amend 반영
-- GitHub issue/project body 로 옮길 title/body 목록 출력
-
-[NEVER]
-- production code, package install, Pi install/update, GitHub destructive mutation unless user explicitly asks
-- worker nested peer-call 문구 삽입
-
-[Validation]
-위 Validation cmd 실행.
-
-[작업 완료 시]
-변경 파일, validation 결과, GitHub issue title/body 목록 보고.
-```
+1. commit: `docs(T15): add Pi runtime backlog and ticket graph` (본문에 `Closes #36` 포함)
+2. lead/orchestrator-owned `CodexAdversarialXHigh` docs review gate on the local diff. If formal read-only review hits the documented WindowsApps policy block, record `ReviewRunError` and use controlled-bypass only under PROJECT-RULES.md conditions.
+3. push + PR 생성 only after the docs review gate is Clean.
+4. GitHub 카드 #36 complete after PR exists and the review gate evidence is recorded.

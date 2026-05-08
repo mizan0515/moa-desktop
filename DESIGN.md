@@ -1,22 +1,54 @@
 # MoA Desktop — Design Document (User-authored, 2026-05-06)
 
 ## Vision
- Claude Code + Codex CLI를 sibling worker로 실행하고, Pi 를 parent-owned third harness runtime 으로 편입하는 **별도 데스크탑 앱**. 액자형 호출(Codex→Claude→Codex 또는 그 반대) 회피. 사용자는 한 번 명령, 앱이 MoA 흐름(first-pass 병렬 → synthesis → adversarial → mutation 1명 → review → verification)을 자동 진행. Pi 는 workflow 를 대체하지 않고 programmable harness/equipment runtime 으로 들어온다.
+Claude Code + Codex CLI를 sibling worker로 실행하는 **별도 데스크탑 앱**. 액자형 호출(Codex→Claude→Codex 또는 그 반대) 회피. 사용자는 한 번 명령, 앱이 MoA 흐름(first-pass 병렬 → synthesis → adversarial → mutation 1명 → review → verification)을 자동 진행.
 
 ## Architecture (sibling, not nested)
 ```
 MoA Desktop (parent orchestrator)
   ├─ Claude Worker (claude -p ...)
   ├─ Codex Worker (codex exec ...)
-  ├─ Pi Runtime (pi --mode rpc / moa-pi-host sidecar)
+  ├─ Pi Runtime (pi --mode rpc / moa-pi-host sidecar; parent-owned)
   ├─ Orchestrator (Flow A/B/C/D 판단)
-  ├─ Lock Manager (mutation owner: none|claude|codex)
+  ├─ Lock Manager (mutation owner: none|claude|codex|pi; pi off by default)
   ├─ Diff Gate (순차 수정 시 최신 재확인)
   ├─ Consensus Engine (5칸 schema)
   └─ UI (Codex Desktop 같은 실무 화면)
 ```
 
-**금지 구조**: Codex→Claude→Codex, Claude→Codex→Claude, Worker가 peer 호출. Pi extension/package 가 Claude/Codex executable, `/codex:*`, Claude/Codex MCP, `TeamCreate`, `Agent` 를 직접 호출하는 것도 같은 peer-recursion 위반이다.
+**금지 구조**: Codex→Claude→Codex, Claude→Codex→Claude, Worker가 peer 호출.
+
+## Harness Runtime Architecture (Claude/Codex/Pi)
+
+MoA Desktop 의 parent orchestrator 는 개별 AI CLI 를 직접 worker 내부 tool 로 중첩하지 않고, 모두 같은 `HarnessRuntime` boundary 로 소유한다.
+
+```text
+HarnessRuntime
+  ├─ runtimeKind: "claude" | "codex" | "pi"
+  ├─ permissions: read-only | reviewer | conversational | mutation-owner
+  ├─ adapter: ClaudeRuntimeAdapter | CodexRuntimeAdapter | PiRuntimeAdapter
+  ├─ event stream: normalized lane events
+  ├─ capability manifest: tools/files/network/ui/package/session
+  └─ ReviewRunRecord participation: advisory signal only unless profile is mandatory gate
+```
+
+Pi 는 세 번째 harness runtime 이며 worker nested peer-call 이 아니다. 초기 Pi lane 은 read-only/research/reviewer/conversational permission 만 가진다. Pi mutation owner 승격은 T15g 이후 별도 opt-in setting, T4 worktree mutation lock, T15d package trust, T15e UI capability gate, mandatory review gate all-pass 가 모두 있을 때만 검토한다.
+
+```text
+MoA Parent Orchestrator
+  ├─ ClaudeRuntimeAdapter
+  ├─ CodexRuntimeAdapter
+  └─ PiRuntimeAdapter
+       ├─ PiRpcAdapter: pi --mode rpc --no-session JSONL
+       └─ PiSdkHost: sidecars/moa-pi-host using @earendil-works/pi-coding-agent
+```
+
+Pi package, extension, custom UI, hot reload, model/session tree 는 MoA policy object 로 들어온다. Pi extension 은 MoA orchestrator 위에 설 수 없고, tool call/package install/package update/hot reload/custom UI request 는 모두 T13 PolicyPack, WorkerCommandGuard, mutation lock, capability manifest 를 거친 뒤에만 active 된다.
+
+Verified metadata without install/update on 2026-05-08:
+- `@earendil-works/pi-coding-agent` npm latest: `0.74.0`.
+- `@mariozechner/pi-coding-agent` is deprecated and points to `@earendil-works/pi-coding-agent`.
+- `earendil-works/pi` remote HEAD: `3421726e8629d4cd344e75b94bdf9d7412dfddca`.
 
 ## Flows
 
@@ -89,46 +121,14 @@ Windows shell, sandbox, 대량 mechanical edit. Codex가 작성, Claude가 spot 
 - Do NOT call Claude MCP, Codex MCP, claude_code_peer, TeamCreate, Agent.
 - If peer needed, write `NEED_PEER_REVIEW` and stop.
 
+### Pi Runtime:
+- You are Pi Runtime in MoA Desktop. Independent harness runtime, not orchestrator.
+- Do NOT call Claude or Codex directly. Do NOT run nested peer AI commands.
+- Do NOT install/update/reload Pi packages unless MoA parent policy explicitly approved pinned source, sha256, capability manifest, and mutation lock state.
+- If peer review needed, emit a typed advisory event and stop. Mandatory `CodexAdversarialXHigh` remains parent-owned.
+
 ### Review Gate Owner:
-- Mandatory `CodexAdversarialXHigh` review gates are lead/orchestrator-owned, never worker-owned. In the app this means source=orchestrator ReviewProfile. During Codex Desktop manual development, a user-requested lead PowerShell `codex exec --ephemeral --sandbox read-only ... --output-last-message <repo>/.moa-desktop/reviews/<stamp>.md` review is allowed and must be recorded as review evidence. `--dangerously-bypass-approvals-and-sandbox` is mutation-in-worktree only, not review-gate evidence.
-
-## Pi Runtime / Harness Runtime (T15)
-
-Pi 자체를 MoA Desktop 안에 넣는다. 단, Pi 는 Claude/Codex worker 내부 기능이 아니라 MoA parent orchestrator 가 소유하는 세 번째 `HarnessRuntime` 이다.
-
-```ts
-type HarnessRuntimeKind = "claude" | "codex" | "pi";
-
-interface HarnessRuntime {
-  kind: HarnessRuntimeKind;
-  startSession(input: StartSessionInput): Promise<SessionHandle>;
-  prompt(sessionId: string, prompt: string): Promise<void>;
-  steer(sessionId: string, message: string): Promise<void>;
-  followUp(sessionId: string, message: string): Promise<void>;
-  abort(sessionId: string): Promise<void>;
-  setModel?(sessionId: string, modelRef: ModelRef): Promise<void>;
-  compact?(sessionId: string, options: CompactOptions): Promise<void>;
-  fork?(sessionId: string, entryId: string): Promise<SessionHandle>;
-  reloadExtensions?(sessionId: string): Promise<ReloadResult>;
-}
-```
-
-### Pi integration stages
-
-1. **Pi RPC MVP**: `PiRpcAdapter` 가 `pi --mode rpc --no-session` 를 Tauri/Rust `ProcessRunner` 로 spawn 하고 strict JSONL stdin/stdout 을 처리한다. command id correlation, event stream, abort, set_model, compact, get_state 를 우선 구현한다.
-2. **Pi SDK sidecar**: Node sidecar `moa-pi-host` 가 `@earendil-works/pi-coding-agent` SDK 를 직접 사용한다. `createAgentSession`, `DefaultResourceLoader`, `createEventBus`, `ModelRegistry`, `SessionManager` 를 sidecar 내부에서만 사용하고 frontend 에 직접 넣지 않는다.
-3. **Policy-gated packages/extensions**: Pi packages/extensions/custom UI/hot reload 는 T13 policy/safety gate 아래에서만 활성화한다. package 는 pinned version, sha256, source review flag, capability manifest, `autoUpdate=false` default 를 가져야 한다.
-
-초기 Pi lane permission 은 read-only/research/reviewer/conversational 이다. Pi mutation owner 는 T15g 의 MoA first-party guard extensions, package trust, worktree lock, review gate 가 모두 붙은 뒤 별도 opt-in setting 으로만 승격한다.
-
-### Pi package and hot reload policy
-
-- `pi install` / `pi update` 자동 실행 금지.
-- project-local `.pi/settings.json` 가 package 를 요구해도 자동 설치 금지.
-- package install/update 는 user confirm + source review + pinned version + sha256 + capability manifest 가 필요하다.
-- hot reload 는 MoA app command 로만 실행한다. mutation lock 보유 session 이 있으면 reject 하고, manifest/hash 재검증 후 다음 turn/lane 부터 적용한다.
-- Pi session tree 는 lane-local mirror 이며 MoA journal/ResumePacket 을 대체하지 않는다.
-- Pi review 는 추가 신호일 수 있지만 mandatory `CodexAdversarialXHigh` gate 를 대체하지 않는다.
+- Mandatory `CodexAdversarialXHigh` review gates are lead/orchestrator-owned, never worker-owned. In the app this means source=orchestrator ReviewProfile. During Codex Desktop manual development, a user-requested lead PowerShell `codex exec --ephemeral --sandbox read-only ... --output-last-message <repo>/.moa-desktop/reviews/<stamp>.md` review is allowed and must be recorded as review evidence. `--dangerously-bypass-approvals-and-sandbox` is mutation-in-worktree only, except for the narrowly audited controlled-bypass review gate allowed after the formal read-only attempt fails with the documented WindowsApps `pwsh.exe ... blocked by policy` `ENV_BLOCKED` signature. Controlled-bypass review remains READ-ONLY, lead/manual only, and requires output capture plus before/after status evidence.
 
 ## WorkerCommandGuard + Output Scanner
 
@@ -137,6 +137,7 @@ interface HarnessRuntime {
 ### Block list
 - `/codex:`, `codex exec`, `claude -p`, `claude_code_peer`, `Claude MCP`, `Codex MCP`
 - `TeamCreate`, `Agent`, `call Codex`, `call Claude`, `ask another AI`, `run another agent`
+- worker-source `pi install`, `pi update`, package `/reload`, unpinned Pi package activation, or Pi extension requests that expand command/network/filesystem/UI capabilities without MoA parent approval
 
 ## Claude Command Adapter
 
@@ -180,6 +181,17 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c 'web_search="live"' \
 - mutation: lock owner=codex 일 때만, 최신 re-read + diff checkpoint 후
 - 비차단 경고 (기록만): chatgpt.com 403, PowerShell shell snapshot 미지원, MCP client `program not found`
 
+## Pi Runtime Adapter (T15)
+
+Pi MVP 는 RPC first, SDK sidecar second 로 간다.
+
+- `PiRpcAdapter`: Tauri/Rust `ProcessRunner` 가 argv array 로 `pi --mode rpc --no-session` 을 spawn 하고 stdin/stdout JSONL 을 strict framing 한다. LF delimiter 만 record 로 인정하고 request `id` 로 correlation 한다.
+- `PiSdkHost`: `sidecars/moa-pi-host` Node sidecar 가 `@earendil-works/pi-coding-agent` SDK 를 사용한다. SDK 기능(`createAgentSession`, `DefaultResourceLoader`, `createEventBus`, `ModelRegistry`, `SessionManager`)은 MoA approved resource roots 와 capability manifest 로 제한한다.
+- Runtime events: `agent_start`, `turn_start`, `message_update`, `tool_execution_*`, `extension_ui_request`, `agent_end` 를 MoA lane event 로 normalize 한다.
+- Initial permissions: read-only/research/reviewer/conversational. Mutation owner 는 off by default.
+- Gate invariant: Pi review, Pi package, Pi extension, equipment profile 은 mandatory `CodexAdversarialXHigh` gate 를 disable 하거나 대체할 수 없다.
+- Package invariant: `pi install`, `pi update`, project-local `.pi/settings.json` package auto-install, package hot reload 는 user confirm + pinned version/commit/path + sha256 + capability manifest + mutation lock check 전까지 blocked event 로 기록한다.
+
 ## Settings (~/.moa-desktop/settings.json)
 ```json
 {
@@ -192,7 +204,7 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c 'web_search="live"' \
   "sameFileSequentialEdit": true,
   "claude": {"enabled": true, "command": "claude", "model": "opus", "maxTurns": 20, "allowWeb": true, "allowEditWhenOwner": true},
   "codex": {"enabled": true, "commandTemplate": "codex exec --ephemeral -c model_reasoning_effort='high' -c web_search=\"live\" --sandbox {{sandboxMode}} --json --cd {{cwd}} {{prompt}}", "_commandTemplateNote": "read-only first-pass 전용 template ({{sandboxMode}}=read-only). Mutation 은 별도 빌더 (`src-tauri/src/adapters/codex.rs::mutation_argv`) — `--sandbox` 제거 + `--dangerously-bypass-approvals-and-sandbox` 추가, isolated worktree 안 (Windows S2 #5).", "allowWeb": true, "allowEditWhenOwner": true},
-  "pi": {"enabled": false, "command": "pi", "package": "@earendil-works/pi-coding-agent", "mode": "rpc-first", "allowMutationOwner": false, "autoUpdatePackages": false, "allowProjectLocalPackageAutoInstall": false},
+  "pi": {"enabled": false, "runtimeMode": "rpc", "packageAutoInstall": false, "packageAutoUpdate": false, "allowMutationOwner": false},
   "safety": {"blockPeerRecursion": true, "blockSecrets": true, "requireGitCheckpoint": true, "stopOnTestFailure": true}
 }
 ```
@@ -225,13 +237,11 @@ codex exec --ephemeral -c model_reasoning_effort='high' -c 'web_search="live"' \
 - 머지 통합기 (`/병행통합` 등가, T12): 머지 순서대로 patch apply → 충돌 시 stop + 한국어 보고
 - **다중 프로젝트 동시** (단일 앱 인스턴스 + 최상위 프로젝트 탭, Codex/Claude Desktop 패턴): repo-scoped lock manager, per-project settings/journal/telemetry, 한 프로젝트는 한 탭에서만 활성
 
-## v1.6 scope (Pi Runtime + conversational)
-- T15 Pi Runtime EPIC: Pi 를 parent-owned third harness runtime 으로 편입한다.
-- T15a/T15b: compatibility spike 후 `pi --mode rpc` 기반 `PiRpcAdapter` MVP.
-- T15c: `moa-pi-host` Node sidecar 에서 `@earendil-works/pi-coding-agent` SDK 직접 구동.
-- T15d/T15e/T15f/T15g: package trust, extension UI bridge, model/session tree, MoA native Pi extensions.
-- T14 amend: conversational mode 는 Pi interactive lane 후보도 포함한다.
-- T16: Harness Marketplace / Equipment Profiles. workflow 는 MoA 가 유지하고 runtime/model/toolset/extension pack 만 profile 로 교체한다.
+## v1.6 scope (Pi Runtime + equipment profiles)
+- Pi 자체를 MoA parent-owned third `HarnessRuntime` 으로 편입한다 (T15).
+- T10/T11/T12/T14 는 `runtimeKind: "claude" | "codex" | "pi"` 를 schema 로 소비한다. Pi lane 활성화는 Pi runtime capability 와 policy gate 결과에 따른다.
+- T15a-T15g 는 compatibility spike → RPC adapter → SDK sidecar → package trust → extension UI bridge → model/session tree → first-party MoA Pi extensions 순서로 진행한다.
+- T16 은 workflow 는 유지하고 장비 구성만 바꾸는 Harness Marketplace / Equipment Profiles 를 제공한다.
 
 ## Implementation steps (사용자 제시)
 1. Tauri + React + TS scaffold

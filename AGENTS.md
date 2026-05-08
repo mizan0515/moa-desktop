@@ -28,6 +28,13 @@
 - 사용자 개입 2 곳: 작업 입력 + 최종 patch apply confirm
 - **PrimaryRole** (T13 L1, settings.primaryRole): "claude" | "codex". Codex 선택 시 synthesizer / default reviewer / Flow-C mutation owner 모두 Codex. lock state machine 무영향. destructive-network 슬래시 (예: `/메인동기화`) 는 PrimaryRole 무관 단계별 confirm.
 
+### Pi Runtime
+- 역할: MoA Desktop 의 parent-owned third `HarnessRuntime` (worker 내부 tool 이 아님)
+- 호출 방식: T15b `PiRpcAdapter` 는 `pi --mode rpc --no-session` JSONL, T15c `PiSdkHost` 는 `sidecars/moa-pi-host` + `@earendil-works/pi-coding-agent`
+- 초기 권한: read-only/research/reviewer/conversational. mutation owner 는 T15g 이후 opt-in 검토 전까지 off.
+- 금지: Claude/Codex worker 내부에서 Pi 를 peer-call 로 호출, Pi extension 이 `claude`, `codex exec`, `/codex:*`, Claude/Codex MCP, `TeamCreate`, `Agent` 호출, user confirm 없는 `pi install`/`pi update`/hot reload/package activation
+- 필요 시: advisory event 를 emit 하고 stop. mandatory `CodexAdversarialXHigh` gate 는 항상 lead/orchestrator-owned 로 유지.
+
 ## 모든 Agent 의 6 항목 의무 (프롬프트 빌드 시)
 1. Success criteria (검증 가능)
 2. NEVER 영역 (PROJECT-RULES.md 의 NEVER + ticket 별 NEVER)
@@ -43,5 +50,5 @@
 ## 현재 진행 상태 (latest)
 - Branch: `feat/T1-scaffold` (T1 in-flight)
 - Phase: 1 (walking skeleton)
-- 최근 결정: v1.6 에 Pi 자체를 MoA parent-owned third harness runtime 으로 편입 (T15), 이후 T10/T11/T12 는 `runtimeKind: claude|codex|pi` 를 소비하는 Pi-aware multi-ticket 흐름으로 amend
+- 최근 결정: v1.6 에 Pi 자체를 MoA parent-owned third HarnessRuntime 으로 편입 (T15), 이후 T10/T11/T12 는 `runtimeKind: claude|codex|pi` 를 소비하는 Pi-aware multi-ticket 흐름으로 amend
 - 자세한 ticket dependency 는 [PLAN.md](PLAN.md) § 0.7, § 2, § 3, § Phase 6/7

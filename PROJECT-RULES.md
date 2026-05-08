@@ -7,7 +7,7 @@
 - [PLAN.md](PLAN.md) — 구현 phase·F1-F6 critical fixes·Automation Contract·ticket dependency graph
 - [synthesis.md](synthesis.md) — Claude+Codex first-pass 종합본 (참조용)
 - [analysis-claude.md](analysis-claude.md) — Claude first-pass 원본 (참조용)
-- [TICKETS/](TICKETS/) — paste-ready 작업 티켓 (T0-T9 + TINTEGRATE) + v1.5 prequel (T13 EPIC) + v1.5/v1.6 본체 (T15 Pi Runtime, T10/T11/T12 Pi-aware multi-ticket, T14 conversational with Pi, T16 equipment profiles)
+- [TICKETS/](TICKETS/) — paste-ready 작업 티켓 (T0-T9 + TINTEGRATE) + v1.5 prequel (T13 EPIC) + v1.5/v1.6 본체 (T15 Pi Runtime, T10/T11/T12 Pi-aware multi-ticket, T14 conversational with Pi, T16 equipment profiles, T15INTEGRATE)
 
 ## 글로벌 권위 (`~/.claude/`)
 
@@ -41,6 +41,8 @@
 - 사용자 작업 repo 의 main worktree 직접 수정 — 모든 mutation 은 git worktree 격리 (PLAN.md § F4)
 - output 에 `claude -p`, `codex exec`, `/codex:`, `claude_code_peer`, `Claude MCP`, `Codex MCP`, `TeamCreate`, `Agent`, `call Codex`, `call Claude` 등 peer 호출 흔적 (DESIGN.md "Output Scanner" 절)
 - worker context 에서 peer AI executable/command 를 spawn 하거나 tool command 로 실행하는 것. 출력 스캐너는 2차 방어이며, T13 SafetyPolicy 는 process spawn/tool 실행 **전** `claude`, `codex exec`, `/codex:*`, Claude/Codex MCP, `TeamCreate`, `Agent` 계열을 차단해야 한다. 단, lead Codex Desktop 세션/사용자 PowerShell/MoA orchestrator 가 별도 read-only `CodexAdversarialXHigh` review gate 를 실행하는 것은 worker nested peer-call 이 아니다.
+- Pi 를 Claude/Codex worker 내부 tool 또는 nested peer-call 로 넣는 것. Pi 는 MoA parent orchestrator-owned `HarnessRuntime` 이며, `PiRpcAdapter`/`PiSdkHost` 는 parent policy boundary 아래에서만 실행된다.
+- Pi package 자동 설치/자동 업데이트/hot reload. `pi install`, `pi update`, project-local `.pi/settings.json` package 요구는 user confirm + pinned source + sha256 + capability manifest + mutation lock check 전까지 blocked event 로 남긴다.
 
 ## 운영 원칙
 - **MoA Flow C** default (큰 코드 변경): 양측 병렬 first-pass → synthesis → adversarial → 충돌 해결 → mutation 1 명만 → max 3 round
@@ -49,7 +51,7 @@
 - **Mutation = 1 owner**, lock transfer 는 명시적 protocol (DESIGN.md "Same-file sequential edit")
 - **사용자 개입 기본 2 곳**: 작업 입력 + 최종 patch apply confirm (PLAN.md § 0.5 Automation Contract). **예외**: T13 의 DestructiveNetwork slash 명령 (`/메인동기화` 4-5 step, `/백로그` 3 step) 은 step-gate confirm 우선. PLAN.md § 0.6.
 - **Review gate invariant**: PR 생성 전, PR 머지 전, 병행통합 merge 전, main 적용 전에는 lead/orchestrator-owned `CodexAdversarialXHigh` review gate 가 항상 필요하다. MoA Desktop 앱 안에서는 source=orchestrator 의 review profile 이 실행하고, Codex Desktop 수동 개발 흐름에서는 사용자가 명시한 lead PowerShell `codex exec --ephemeral --sandbox read-only ... --output-last-message <repo>/.moa-desktop/reviews/<stamp>.md` 별도 review 가 같은 gate 증거가 될 수 있다. WindowsApps `pwsh.exe -Command ... rejected: blocked by policy` 로 formal read-only review 가 `ENV_BLOCKED` 를 내면 그 attempt 는 `ReviewRunError` 로 저장한다. 그 뒤 lead/manual session 은 controlled-bypass review gate 를 1회 실행할 수 있다: `--dangerously-bypass-approvals-and-sandbox` + READ-ONLY prompt + edit/create/delete/stage/commit/push/format/GitHub mutation 금지 + `--output-last-message` + before/after `git status` + review-caused mutation 0건 + 정확히 1개인 `Verdict: Clean` line 이 모두 필요하다. 이 경우 `command_source_adapter=codex-desktop-lead-powershell-controlled-bypass` 와 failed read-only attempt path 를 limitations/evidence 에 남긴다. controlled-bypass selector 는 output file 존재, 정확히 1개인 `Verdict: ReviewRunError` line, `ENV_BLOCKED`, `WindowsApps`, `pwsh.exe`, concrete policy-block text 가 모두 있을 때만 열리며 generic `blocked by policy` 단독 matching, arbitrary nonzero exit, missing output, timeout, model/tool failure 는 fallback 이 아니라 fail-closed 다. controlled-bypass 는 worker mutation 권한이 아니며, worker prompt 내부 peer 직접 호출은 계속 금지다. 현재 세션 자기검토는 gate evidence 가 아니다. 이 profile/prompt 는 `/codex:adversarial-review --effort xhigh` 와 동등한 의도와 강도여야 하며, `reasoning_effort=xhigh`, prompt template version/hash, model/profile id, command/source adapter, source output path 를 감사 가능하게 남긴다. PrimaryRole=Codex 여도 Codex review 는 빠지지 않으며, Claude review 는 추가 대칭 검토일 뿐 대체물이 아니다. ReviewRunRecord 는 journal/lane result/ResumePacket/PR 또는 merge 보고에 저장한다. profile 실행 불가, `Concern`/`Block`, 또는 audit field 누락은 `ReviewRunError`/fail-closed 로 취급한다.
-- **Pi runtime invariant**: Pi 는 worker 내부 peer-call 이 아니라 MoA parent orchestrator-owned `HarnessRuntime` 이다. Pi package/extension/custom UI/hot reload 는 T13 policy/safety gate 아래에서만 활성화한다. Pi package install/update 는 user confirm + pinned version + sha256 + capability manifest + source review 없이는 금지하고, `autoUpdate=false` 가 기본이다. Pi review 또는 Pi extension 은 mandatory `CodexAdversarialXHigh` gate 를 대체할 수 없다. Pi mutation owner 는 초기 금지이며 T15g 이후 explicit opt-in 으로만 검토한다.
+- **Pi HarnessRuntime invariant**: Pi review, Pi package, Pi extension, Harness Marketplace profile 은 mandatory `CodexAdversarialXHigh` 를 disable 하거나 대체할 수 없다. Pi initial lane permission 은 read-only/research/reviewer/conversational 이며 mutation owner 는 T15g 이후 별도 opt-in setting 과 T4/T15d/T15e/review gate all-pass 전까지 off 다.
 
 ## Codex preflight (본 파일 존재 자체가 preflight 통과 조건)
 Codex MCP 호출 시 워크스페이스 root 에 본 파일이 있어야 NEVER 영역 인식이 시작된다. 본 파일을 삭제하지 말 것.
