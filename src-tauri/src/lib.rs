@@ -15,6 +15,7 @@ pub mod lock;
 pub mod mock;
 pub mod orchestrator;
 pub mod parallel;
+pub mod pi;
 pub mod policy;
 pub mod process;
 pub mod safety;
