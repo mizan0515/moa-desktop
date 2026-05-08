@@ -65,7 +65,10 @@ impl WorkerCommandGuard {
                 reason: format!("worker source cannot execute {}", command.executable),
             });
         }
-        if matches!(command.source, CommandSource::Worker) && shell_invokes_peer_ai(&joined) {
+        let deny_bare_peer_token = command.executable != "worker-output";
+        if matches!(command.source, CommandSource::Worker)
+            && shell_invokes_peer_ai(&joined, deny_bare_peer_token)
+        {
             return Ok(GuardDecision::Deny {
                 reason: "worker source cannot invoke peer AI from shell text".into(),
             });
@@ -106,12 +109,30 @@ pub fn worker_command_guard_check(
     .map_err(|e| e.to_string())
 }
 
-fn shell_invokes_peer_ai(text: &str) -> bool {
+fn shell_invokes_peer_ai(text: &str, deny_bare_peer_token: bool) -> bool {
     let normalized = text.replace('\\', "/").to_lowercase();
     let tokens = normalized
         .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/')))
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
+    if deny_bare_peer_token
+        && tokens.iter().any(|token| {
+            let token = token.trim_matches('/');
+            let exe = token.rsplit('/').next().unwrap_or(token);
+            matches!(
+                exe,
+                "codex"
+                    | "codex.exe"
+                    | "codex.cmd"
+                    | "codex.ps1"
+                    | "claude"
+                    | "claude.exe"
+                    | "claude.cmd"
+            )
+        })
+    {
+        return true;
+    }
     tokens.windows(2).any(|pair| {
         let token = pair[0].trim_matches('/');
         let exe = token.rsplit('/').next().unwrap_or(token);
@@ -213,12 +234,30 @@ mod tests {
             "powershell -Command \"& 'C:\\Tools\\codex.exe' exec review\"",
             "cmd /c \"\\\"codex.cmd\\\" exec review\"",
             "powershell -Command \"& 'C:\\Tools\\claude.exe' -p review\"",
+            "powershell -Command \"& 'C:\\Tools\\codex.exe'\"",
+            "cmd /c claude",
         ] {
             let mut cmd = command("powershell", &[], CommandSource::Worker);
             cmd.shell_text = Some(shell.into());
             let decision = WorkerCommandGuard::check(&cmd).unwrap();
             assert!(matches!(decision, GuardDecision::Deny { .. }), "{shell}");
         }
+    }
+
+    #[test]
+    fn worker_output_guard_does_not_block_bare_model_names_as_text() {
+        let cmd = GuardedCommand {
+            executable: "worker-output".into(),
+            argv: vec![],
+            shell_text: Some("Codex and Claude gave different advice.".into()),
+            cwd: PathBuf::from("."),
+            source: CommandSource::Worker,
+            primary_role: PrimaryRole::Claude,
+        };
+        assert_eq!(
+            WorkerCommandGuard::check(&cmd).unwrap(),
+            GuardDecision::Allow
+        );
     }
 
     #[test]

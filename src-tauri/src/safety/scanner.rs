@@ -63,7 +63,7 @@ const PEER_PATTERNS: &[&str] = &[
     "run another agent",
 ];
 
-const NESTED_AGENT_PATTERNS: &[&str] = &["teamcreate", "agent"];
+const NESTED_AGENT_PATTERNS: &[&str] = &["teamcreate"];
 const WORKER_PRIVILEGE_PATTERNS: &[&str] = &["git push", "gh pr create", "gh pr merge"];
 
 pub fn scan_text(text: &str, context: RoleContext) -> ScanResult {
@@ -136,7 +136,6 @@ mod tests {
             "Codex MCP",
             "claude_code_peer",
             "TeamCreate",
-            "Agent",
             "call Codex",
             "call Claude",
             "ask another AI",
@@ -172,5 +171,13 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn benign_agent_words_are_not_nested_agent_violations() {
+        for text in ["AGENTS.md", "user-agent header", "AI agent summary"] {
+            let result = scan_text(text, ctx(ScanSource::Worker, PrimaryRole::Claude));
+            assert!(result.is_clean(), "{text}");
+        }
     }
 }
