@@ -2,10 +2,7 @@
 //!
 //! Pure helper — given synthesis JSON + original task, produces the prompt
 //! string fed to `adapter.firstpass()` for the adversarial reviewer Worker.
-//! The reviewer is always whichever Lane did NOT synthesize (Codex default,
-//! since Claude is user-facing session holder per § 2.5).
-
-use crate::orchestrator::state::Lane;
+//! The caller chooses the reviewer from `ExecutionPolicy::default_reviewer()`.
 
 const TEMPLATE: &str = r#"[ADVERSARIAL REVIEW — read-only, mutation prohibited]
 
@@ -58,16 +55,6 @@ pub fn render_prompt(task: &str, synthesis_json: &str, round: u32, max_rounds: u
         .replace("{{synthesis_json}}", synthesis_json)
         .replace("{{round}}", &round.to_string())
         .replace("{{max_rounds}}", &max_rounds.to_string())
-}
-
-/// Default reviewer assignment per CODEX-MCP.md § 2.5: "Codex default, since
-/// Claude is user-facing session holder". Returns the Lane that should run
-/// the adversarial round.
-pub fn default_reviewer(synthesizer: Lane) -> Lane {
-    match synthesizer {
-        Lane::Claude | Lane::System => Lane::Codex,
-        Lane::Codex => Lane::Claude,
-    }
 }
 
 /// Verdict extracted from the reviewer's terminal output. Conservative —
@@ -161,13 +148,6 @@ mod tests {
         assert!(p.contains(r#"{"verified":[]}"#));
         assert!(p.contains("currently 2 of max 3"));
         assert!(!p.contains("{{"));
-    }
-
-    #[test]
-    fn default_reviewer_pairs_with_synthesizer() {
-        assert_eq!(default_reviewer(Lane::Claude), Lane::Codex);
-        assert_eq!(default_reviewer(Lane::Codex), Lane::Claude);
-        assert_eq!(default_reviewer(Lane::System), Lane::Codex);
     }
 
     #[test]

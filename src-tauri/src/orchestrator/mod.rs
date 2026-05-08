@@ -39,7 +39,12 @@ use crate::cancel::CancelRegistry;
 use crate::journal::schema::{Entry, Phase as JournalPhase};
 use crate::journal::writer::JournalWriter;
 use crate::lock::manager::{LockManager, LockSource};
+use crate::policy::{ExecutionPolicy, PrimaryRole};
 use crate::process::{ProcessControl, ProcessRunner};
+use crate::safety::{
+    CommandSource, GuardDecision, GuardedCommand, RoleContext, ScanResult, ScanSource,
+    ViolationKind, WorkerCommandGuard,
+};
 use crate::synthesis::{extract_from_text, WorkerEvent};
 
 use self::flow::{classify, ClassifyInput};
@@ -107,6 +112,10 @@ pub struct OrchestrationStart {
     /// Verification command to run post-mutation. Empty = skip.
     #[serde(default)]
     pub verify_cmd: Option<String>,
+    /// T13 primary role. Changes are session-scoped; UI changes apply to
+    /// the next session rather than live mutation ownership.
+    #[serde(default)]
+    pub primary_role: PrimaryRole,
 }
 
 // ─── coordinator state ────────────────────────────────────────────────────
@@ -350,6 +359,7 @@ async fn drive_session(
     mut cmd_rx: mpsc::Receiver<SessionCommand>,
     ack_rx: oneshot::Receiver<()>,
 ) {
+    let policy = ExecutionPolicy::for_role(start.primary_role);
     // FIX-C — wait for the frontend to confirm it has the session in its
     // store before emitting anything. The driver MUST NOT emit before the
     // ack: a `session_start` (or `session_error` on panic) leaking out
@@ -372,6 +382,9 @@ async fn drive_session(
             "task": start.task,
             "mock_mode": start.mock_mode,
             "project_id": start.project_id,
+            "primary_role": policy.primary_role.as_str(),
+            "synthesizer": policy.synthesizer.as_str(),
+            "default_reviewer": policy.default_reviewer().as_str(),
         })),
     );
 
@@ -406,7 +419,7 @@ async fn drive_session(
 
     // 2. First-pass × 2 (Flow C/D) — Flow A/B short-circuit to mutation. ───
     let synth_input = if flow.needs_full_moa() {
-        match run_first_pass_pair(&ctx, &start, &deps, flow).await {
+        match run_first_pass_pair(&ctx, &start, &deps, &policy, flow).await {
             Ok(v) => Some(v),
             Err(e) => return finalize_failed(&ctx, e).await,
         }
@@ -431,6 +444,7 @@ async fn drive_session(
             Some(serde_json::json!({
                 "claude_lines": pair.claude_lines,
                 "codex_lines": pair.codex_lines,
+                "synthesizer": policy.synthesizer.as_str(),
             })),
         );
         match await_synthesis(&ctx, &mut cmd_rx).await {
@@ -456,7 +470,7 @@ async fn drive_session(
     // `Escalated` (Unknown / NeedClarification / max-rounds-exhausted-without-fail)
     // routes to `Final { ok: false }` instead of silently proceeding.
     let adv_outcome = if flow.needs_full_moa() {
-        match run_adversarial_loop(&ctx, &start, &deps, flow, &synthesis_json).await {
+        match run_adversarial_loop(&ctx, &start, &deps, &policy, flow, &synthesis_json).await {
             Ok(o) => o,
             Err(e) => return finalize_failed(&ctx, e).await,
         }
@@ -494,7 +508,7 @@ async fn drive_session(
     let mut session_ok = true;
     let mut session_reason: Option<String> = None;
     if flow.produces_mutation() {
-        match run_mutation_phase(&ctx, &start, &deps, flow, &mut cmd_rx).await {
+        match run_mutation_phase(&ctx, &start, &deps, &policy, flow, &mut cmd_rx).await {
             Ok(MutationOutcome::Applied) => {
                 let outcome = run_verify_phase(&ctx, &start, flow).await;
                 // FIX-F — verify outcome is now load-bearing for `Final.ok`.
@@ -604,6 +618,7 @@ async fn run_first_pass_pair(
     ctx: &DriverCtx,
     start: &OrchestrationStart,
     deps: &Arc<OrchestrationDeps>,
+    policy: &ExecutionPolicy,
     flow: Flow,
 ) -> Result<FirstPassPair, String> {
     ctx.set_state(SessionState::FirstPassRunning {
@@ -623,6 +638,7 @@ async fn run_first_pass_pair(
 
     let claude_adapter = deps.claude(start.mock_mode);
     let codex_adapter = deps.codex(start.mock_mode);
+    let primary_role = policy.primary_role;
 
     let req_claude = ClaudeFirstPass {
         task: start.task.clone(),
@@ -640,16 +656,26 @@ async fn run_first_pass_pair(
     let cancelled_a = ctx.cancelled.clone();
     let active_a = ctx.active.clone();
     let claude_sup: LaneSupervisor<Result<usize, String>> = LaneSupervisor::spawn(async move {
+        guard_orchestrator_worker_spawn(
+            &claude_adapter.config().program,
+            "firstpass",
+            &req_claude.cwd,
+            primary_role,
+        )?;
         let stream = claude_adapter
             .firstpass(req_claude)
             .await
             .map_err(|e| format!("claude firstpass spawn: {e}"))?;
-        track_active(&active_a, "claude-firstpass", stream.control.clone());
+        let control = stream.control.clone();
+        track_active(&active_a, "claude-firstpass", control.clone());
         let n = drain_claude_events(
             &app_a,
             &sid_a,
             Phase::FirstPass,
             Lane::Claude,
+            primary_role,
+            &control,
+            &active_a,
             stream.events,
             &cancelled_a,
         )
@@ -663,6 +689,12 @@ async fn run_first_pass_pair(
     let cancelled_b = ctx.cancelled.clone();
     let active_b = ctx.active.clone();
     let codex_sup: LaneSupervisor<Result<usize, String>> = LaneSupervisor::spawn(async move {
+        guard_orchestrator_worker_spawn(
+            &codex_adapter.config().program,
+            "firstpass",
+            &req_codex.cwd,
+            primary_role,
+        )?;
         let stream = codex_adapter
             .firstpass(req_codex)
             .await
@@ -670,12 +702,16 @@ async fn run_first_pass_pair(
         // FIX-F — both lanes register independently in the CancelRegistry,
         // so a mid-stream cancel aborts both (pre-FIX-F we tracked only one
         // and let the other keep burning tokens until natural exit).
-        track_active(&active_b, "codex-firstpass", stream.control.clone());
+        let control = stream.control.clone();
+        track_active(&active_b, "codex-firstpass", control.clone());
         let n = drain_codex_events(
             &app_b,
             &sid_b,
             Phase::FirstPass,
             Lane::Codex,
+            primary_role,
+            &control,
+            &active_b,
             stream.events,
             &cancelled_b,
         )
@@ -725,6 +761,23 @@ fn track_active(reg: &CancelRegistry, run_id: &str, ctl: ProcessControl) {
 
 fn untrack_active(reg: &CancelRegistry, run_id: &str) {
     reg.unregister(run_id);
+}
+
+fn guard_orchestrator_worker_spawn(
+    executable: &Path,
+    mode: &str,
+    cwd: &Path,
+    primary_role: PrimaryRole,
+) -> Result<(), String> {
+    WorkerCommandGuard::require_allowed(&GuardedCommand {
+        executable: executable.to_string_lossy().into_owned(),
+        argv: vec![mode.to_string()],
+        shell_text: None,
+        cwd: cwd.to_path_buf(),
+        source: CommandSource::Orchestrator,
+        primary_role,
+    })
+    .map_err(|e| format!("worker spawn guard: {e}"))
 }
 
 /// Emit a canonical WorkerEvent on `kind="line"`. The TS-side
@@ -788,11 +841,92 @@ fn worker_events_from_codex(ev: &CodexEvent) -> Vec<WorkerEvent> {
     }
 }
 
+fn claude_event_text_for_scanner(ev: &ClaudeEvent) -> Option<String> {
+    match ev {
+        ClaudeEvent::Assistant { text, .. } => Some(text.clone()),
+        ClaudeEvent::Other { raw, .. } => crate::safety::scanner::scanner_text_from_json(raw),
+        _ => None,
+    }
+}
+
+fn codex_event_text_for_scanner(ev: &CodexEvent) -> Option<String> {
+    match ev {
+        CodexEvent::ItemCompleted { raw, .. } => raw
+            .get("item")
+            .and_then(|i| i.get("text"))
+            .and_then(|t| t.as_str())
+            .map(str::to_string),
+        CodexEvent::Other { raw, .. } => crate::safety::scanner::scanner_text_from_json(raw),
+        _ => None,
+    }
+}
+
+fn codex_event_model_text(ev: &CodexEvent) -> Option<String> {
+    match ev {
+        CodexEvent::ItemCompleted { item_type, raw, .. }
+            if item_type.as_deref() == Some("agent_message") =>
+        {
+            raw.get("item")
+                .and_then(|i| i.get("text"))
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        }
+        CodexEvent::Other { raw, .. } => {
+            raw.get("text").and_then(|v| v.as_str()).map(str::to_string)
+        }
+        _ => None,
+    }
+}
+
+fn guard_worker_sourced_text(text: &str, primary_role: PrimaryRole) -> ScanResult {
+    let role_context = RoleContext {
+        primary_role,
+        source: ScanSource::Worker,
+    };
+    let command = GuardedCommand {
+        executable: "worker-output".into(),
+        argv: Vec::new(),
+        shell_text: Some(text.into()),
+        cwd: PathBuf::from("."),
+        source: CommandSource::Worker,
+        primary_role,
+    };
+    match WorkerCommandGuard::check(&command) {
+        Ok(GuardDecision::Allow) => ScanResult::Clean,
+        Ok(GuardDecision::Deny { reason }) => ScanResult::Violation {
+            violation_kind: ViolationKind::PeerAiCommand,
+            evidence: reason,
+            role_context,
+        },
+        Err(e) => ScanResult::Violation {
+            violation_kind: ViolationKind::PeerAiCommand,
+            evidence: e.to_string(),
+            role_context,
+        },
+    }
+}
+
+fn emit_safety_violation(app: &AppHandle, sid: &str, phase: Phase, lane: Lane, result: ScanResult) {
+    if let Ok(payload) = serde_json::to_value(result) {
+        emit(
+            app,
+            sid,
+            phase,
+            Some(lane),
+            "safety_violation",
+            Some(payload),
+        );
+    }
+}
+
 async fn drain_claude_events(
     app: &AppHandle,
     sid: &str,
     phase: Phase,
     lane: Lane,
+    primary_role: PrimaryRole,
+    control: &ProcessControl,
+    active: &CancelRegistry,
     mut rx: mpsc::Receiver<ClaudeEvent>,
     cancelled: &AtomicBool,
 ) -> usize {
@@ -802,6 +936,16 @@ async fn drain_claude_events(
             break;
         }
         n += 1;
+        if let Some(text) = claude_event_text_for_scanner(&ev) {
+            let result = guard_worker_sourced_text(&text, primary_role);
+            if !result.is_clean() {
+                emit_safety_violation(app, sid, phase, lane, result);
+                cancelled.store(true, Ordering::SeqCst);
+                let _ = control.abort().await;
+                let _ = active.abort_all().await;
+                break;
+            }
+        }
         for we in worker_events_from_claude(&ev) {
             emit_worker_event(app, sid, phase, lane, &we);
         }
@@ -818,6 +962,9 @@ async fn drain_codex_events(
     sid: &str,
     phase: Phase,
     lane: Lane,
+    primary_role: PrimaryRole,
+    control: &ProcessControl,
+    active: &CancelRegistry,
     mut rx: mpsc::Receiver<CodexEvent>,
     cancelled: &AtomicBool,
 ) -> usize {
@@ -827,6 +974,16 @@ async fn drain_codex_events(
             break;
         }
         n += 1;
+        if let Some(text) = codex_event_text_for_scanner(&ev) {
+            let result = guard_worker_sourced_text(&text, primary_role);
+            if !result.is_clean() {
+                emit_safety_violation(app, sid, phase, lane, result);
+                cancelled.store(true, Ordering::SeqCst);
+                let _ = control.abort().await;
+                let _ = active.abort_all().await;
+                break;
+            }
+        }
         for we in worker_events_from_codex(&ev) {
             emit_worker_event(app, sid, phase, lane, &we);
         }
@@ -878,6 +1035,7 @@ async fn run_adversarial_loop(
     ctx: &DriverCtx,
     start: &OrchestrationStart,
     deps: &Arc<OrchestrationDeps>,
+    policy: &ExecutionPolicy,
     flow: Flow,
     synthesis_json: &str,
 ) -> Result<AdversarialResult, String> {
@@ -897,8 +1055,7 @@ async fn run_adversarial_loop(
             Some(serde_json::json!({ "round": round })),
         );
 
-        // Default reviewer: Codex (Claude is user-facing session holder).
-        let reviewer = adversarial::default_reviewer(Lane::Claude);
+        let reviewer = policy.default_reviewer();
         let prompt_body =
             adversarial::render_prompt(&start.task, synthesis_json, round, MAX_ADVERSARIAL_ROUNDS);
 
@@ -913,23 +1070,43 @@ async fn run_adversarial_loop(
                     files: start.files.clone(),
                     cwd: start.cwd.clone(),
                 };
+                guard_orchestrator_worker_spawn(
+                    &codex.config().program,
+                    "adversarial-review",
+                    &req.cwd,
+                    policy.primary_role,
+                )?;
                 let stream = codex
                     .firstpass(req)
                     .await
                     .map_err(|e| format!("codex adversarial spawn: {e}"))?;
                 let run_id = format!("codex-adv-r{round}");
-                track_active(&ctx.active, &run_id, stream.control.clone());
+                let control = stream.control.clone();
+                track_active(&ctx.active, &run_id, control.clone());
                 let mut text = String::new();
                 let mut rx = stream.events;
                 while let Some(ev) = rx.recv().await {
                     if ctx.is_cancelled() {
                         break;
                     }
-                    if let CodexEvent::Other { ref raw, .. } = ev {
-                        if let Some(s) = raw.get("text").and_then(|v| v.as_str()) {
-                            text.push_str(s);
-                            text.push('\n');
+                    if let Some(scan_text_body) = codex_event_text_for_scanner(&ev) {
+                        let scan = guard_worker_sourced_text(&scan_text_body, policy.primary_role);
+                        if !scan.is_clean() {
+                            emit_safety_violation(
+                                &ctx.app,
+                                &ctx.sid,
+                                Phase::Adversarial,
+                                Lane::Codex,
+                                scan,
+                            );
+                            let _ = control.abort().await;
+                            untrack_active(&ctx.active, &run_id);
+                            return Err("safety violation in codex adversarial output".into());
                         }
+                    }
+                    if let Some(s) = codex_event_model_text(&ev) {
+                        text.push_str(&s);
+                        text.push('\n');
                     }
                     for we in worker_events_from_codex(&ev) {
                         emit_worker_event(&ctx.app, &ctx.sid, Phase::Adversarial, Lane::Codex, &we);
@@ -949,17 +1126,39 @@ async fn run_adversarial_loop(
                     files: start.files.clone(),
                     cwd: start.cwd.clone(),
                 };
+                guard_orchestrator_worker_spawn(
+                    &claude.config().program,
+                    "adversarial-review",
+                    &req.cwd,
+                    policy.primary_role,
+                )?;
                 let stream = claude
                     .firstpass(req)
                     .await
                     .map_err(|e| format!("claude adversarial spawn: {e}"))?;
                 let run_id = format!("claude-adv-r{round}");
-                track_active(&ctx.active, &run_id, stream.control.clone());
+                let control = stream.control.clone();
+                track_active(&ctx.active, &run_id, control.clone());
                 let mut text = String::new();
                 let mut rx = stream.events;
                 while let Some(ev) = rx.recv().await {
                     if ctx.is_cancelled() {
                         break;
+                    }
+                    if let Some(scan_text_body) = claude_event_text_for_scanner(&ev) {
+                        let scan = guard_worker_sourced_text(&scan_text_body, policy.primary_role);
+                        if !scan.is_clean() {
+                            emit_safety_violation(
+                                &ctx.app,
+                                &ctx.sid,
+                                Phase::Adversarial,
+                                Lane::Claude,
+                                scan,
+                            );
+                            let _ = control.abort().await;
+                            untrack_active(&ctx.active, &run_id);
+                            return Err("safety violation in claude adversarial output".into());
+                        }
                     }
                     if let ClaudeEvent::Assistant { text: ref t, .. } = ev {
                         text.push_str(t);
@@ -1229,14 +1428,13 @@ async fn run_mutation_phase(
     ctx: &DriverCtx,
     start: &OrchestrationStart,
     deps: &Arc<OrchestrationDeps>,
+    policy: &ExecutionPolicy,
     flow: Flow,
     cmd_rx: &mut mpsc::Receiver<SessionCommand>,
 ) -> Result<MutationOutcome, String> {
-    // Mutation owner — Flow A: Claude, Flow B: Codex, Flow C: Claude default.
-    let owner = match flow {
-        Flow::B => Lane::Codex,
-        _ => Lane::Claude,
-    };
+    let owner = policy
+        .mutation_owner_default(flow)
+        .ok_or_else(|| format!("flow {} has no mutation owner", flow.as_str()))?;
     let owner_worker = owner
         .to_worker()
         .ok_or_else(|| "system lane cannot mutate".to_string())?;
@@ -1364,6 +1562,12 @@ async fn run_mutation_phase(
                 task: start.task.clone(),
                 worktree_path: wt.path.clone(),
             };
+            guard_orchestrator_worker_spawn(
+                &adapter.config().program,
+                "mutation",
+                &req.worktree_path,
+                policy.primary_role,
+            )?;
             let stream = match adapter.mutation(req).await {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -1371,7 +1575,8 @@ async fn run_mutation_phase(
                     return Err(format!("claude mutation spawn: {e}; {cleanup}"));
                 }
             };
-            track_active(&ctx.active, "mutation", stream.control.clone());
+            let control = stream.control.clone();
+            track_active(&ctx.active, "mutation", control.clone());
             if let Some(j) = ctx.journal.as_ref() {
                 let _ = j.note(JournalPhase::WorkerStarted, "claude-mutation");
             }
@@ -1380,6 +1585,9 @@ async fn run_mutation_phase(
                 &ctx.sid,
                 Phase::Mutation,
                 Lane::Claude,
+                policy.primary_role,
+                &control,
+                &ctx.active,
                 stream.events,
                 &ctx.cancelled,
             )
@@ -1394,6 +1602,12 @@ async fn run_mutation_phase(
                 repo_root: repo_root.clone(),
                 worktree_path: wt.path.clone(),
             };
+            guard_orchestrator_worker_spawn(
+                &adapter.config().program,
+                "mutation",
+                &req.worktree_path,
+                policy.primary_role,
+            )?;
             let stream = match adapter.mutation(req).await {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -1401,7 +1615,8 @@ async fn run_mutation_phase(
                     return Err(format!("codex mutation spawn: {e}; {cleanup}"));
                 }
             };
-            track_active(&ctx.active, "mutation", stream.control.clone());
+            let control = stream.control.clone();
+            track_active(&ctx.active, "mutation", control.clone());
             if let Some(j) = ctx.journal.as_ref() {
                 let _ = j.note(JournalPhase::WorkerStarted, "codex-mutation");
             }
@@ -1410,6 +1625,9 @@ async fn run_mutation_phase(
                 &ctx.sid,
                 Phase::Mutation,
                 Lane::Codex,
+                policy.primary_role,
+                &control,
+                &ctx.active,
                 stream.events,
                 &ctx.cancelled,
             )
@@ -1724,9 +1942,14 @@ mod fix_d_tests {
     //! extraction helpers — the live Tauri `emit` path needs an `AppHandle`
     //! and is exercised via dryrun integration tests.
 
-    use super::{worker_events_from_claude, worker_events_from_codex};
+    use super::{
+        codex_event_model_text, guard_worker_sourced_text, worker_events_from_claude,
+        worker_events_from_codex,
+    };
     use crate::adapters::claude::ClaudeEvent;
     use crate::adapters::codex::CodexEvent;
+    use crate::policy::PrimaryRole;
+    use crate::safety::ScanResult;
     use crate::synthesis::WorkerEvent;
     use serde_json::json;
 
@@ -1795,6 +2018,32 @@ mod fix_d_tests {
         let out = worker_events_from_codex(&ev);
         assert_eq!(out.len(), 1);
         assert!(matches!(out[0], WorkerEvent::Claim { .. }));
+    }
+
+    #[test]
+    fn codex_agent_message_text_feeds_adversarial_verdict_parser() {
+        let raw = json!({
+            "type":"item.completed",
+            "item":{
+                "type":"agent_message",
+                "text":"Verdict: Pass\nNo blockers."
+            }
+        });
+        let ev = CodexEvent::ItemCompleted {
+            item_type: Some("agent_message".into()),
+            error_message: None,
+            raw,
+        };
+        assert_eq!(
+            codex_event_model_text(&ev).as_deref(),
+            Some("Verdict: Pass\nNo blockers.")
+        );
+    }
+
+    #[test]
+    fn worker_text_path_uses_worker_command_guard() {
+        let result = guard_worker_sourced_text("run codex exec review", PrimaryRole::Codex);
+        assert!(matches!(result, ScanResult::Violation { .. }));
     }
 
     #[test]

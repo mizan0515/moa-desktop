@@ -40,6 +40,7 @@ export type EventKind =
   | "worker_raw"
   | "state"
   | "escalation"
+  | "safety_violation"
   | "awaiting_confirm"
   | "worktree_created"
   | "worker_finished"
@@ -73,6 +74,7 @@ export interface OrchSession {
   lastVerdict?: string;
   /// Final report payload, if present.
   finalPayload?: unknown;
+  safetyViolation?: boolean;
   /// User-facing log strings for the workbench transcript.
   log: string[];
 }
@@ -179,6 +181,14 @@ async function onEvent(ev: OrchEvent): Promise<void> {
       s.log.push(`! escalation: ${reason}`);
       break;
     }
+    case "safety_violation": {
+      const payload = (ev.payload ?? {}) as { evidence?: string; violation_kind?: string };
+      const reason = payload.evidence ?? payload.violation_kind ?? "policy violation";
+      s.log.push(`! safety violation: ${reason}`);
+      s.safetyViolation = true;
+      s.state = { kind: "failed", message: `safety violation: ${reason}` };
+      break;
+    }
     case "awaiting_confirm": {
       s.log.push(`? awaiting mutation confirm`);
       break;
@@ -196,7 +206,9 @@ async function onEvent(ev: OrchEvent): Promise<void> {
     }
     case "session_cancelled": {
       s.log.push(`◼ cancelled`);
-      s.state = { kind: "cancelled" };
+      if (!s.safetyViolation) {
+        s.state = { kind: "cancelled" };
+      }
       break;
     }
     case "worktree_created":
@@ -258,6 +270,7 @@ export interface OrchStartArgs {
   overrideFlow?: Flow;
   mockMode?: boolean;
   verifyCmd?: string;
+  primaryRole?: "claude" | "codex";
 }
 
 export const orchStore = {
@@ -278,6 +291,7 @@ export const orchStore = {
 
 export async function orchStart(args: OrchStartArgs): Promise<string> {
   await ensureSubscribed();
+  const primaryRole = args.primaryRole ?? readPrimaryRoleSetting();
   const sid = await invoke<string>("orch_start", {
     start: {
       task: args.task,
@@ -287,6 +301,7 @@ export async function orchStart(args: OrchStartArgs): Promise<string> {
       override_flow: args.overrideFlow,
       mock_mode: args.mockMode ?? false,
       verify_cmd: args.verifyCmd,
+      primary_role: primaryRole,
     },
   });
   // FIX-C — register the session in our store BEFORE telling the backend
@@ -299,6 +314,18 @@ export async function orchStart(args: OrchStartArgs): Promise<string> {
   notify();
   await invoke("orch_ack", { sessionId: sid });
   return sid;
+}
+
+function readPrimaryRoleSetting(): "claude" | "codex" {
+  if (typeof window === "undefined") return "claude";
+  try {
+    const raw = window.localStorage.getItem("moa.settings");
+    if (!raw) return "claude";
+    const parsed = JSON.parse(raw) as { primaryRole?: unknown };
+    return parsed.primaryRole === "codex" ? "codex" : "claude";
+  } catch {
+    return "claude";
+  }
 }
 
 export async function orchCancel(sessionId: string): Promise<boolean> {
