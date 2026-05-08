@@ -26,25 +26,64 @@ MoA first-party Pi extensions 를 제공한다. 이 ticket 이후에만 Pi mutat
 - `sidecars/moa-pi-host/extensions/moa-review-gate/*`
 - `sidecars/moa-pi-host/extensions/moa-ticket-context/*`
 - `sidecars/moa-pi-host/extensions/moa-lane-telemetry/*`
-- `docs/pi-native-extensions.md`
+- `src-tauri/tests/pi_native_extensions_*.rs`
+
+## Read-only
+
+- T13 safety/review APIs
+- T15d/e/f APIs
+- T4 lock/worktree APIs
 
 ## NEVER 영역
 
-- first-party extension 이 mandatory review gate 를 bypass
-- Pi mutation owner default-on
-- unpinned bundled extension
-- ticket context write access
-- WorkerCommandGuard bypass
+- first-party extension 이 command guard 를 우회하지 않는다.
+- Pi review 를 mandatory Codex review gate 로 대체하지 않는다.
+- mutation owner 승격을 default on 으로 하지 않는다.
+- third-party package 를 first-party 로 가장하지 않는다.
 
-## Worker prompt 6 mandatory fields
+## Validation cmd
 
-1. Success criteria: tool guard, review gate metadata, ticket context read-only, telemetry, pinned bundled manifest, mutation opt-in prerequisites.
-2. NEVER 영역: gate bypass, mutation default-on, unpinned extension, writable ticket context, command guard bypass.
-3. Validation cmd:
-   ```powershell
-   npm test -- --run moa-pi-host
-   cargo test --manifest-path src-tauri\Cargo.toml pi_native_extensions
-   ```
-4. Files + lines: this ticket Success criteria, T15d/e/f outputs, T13 review gate invariant.
-5. Alternatives 2개 + pros/cons + 선택 근거: no first-party extensions(safe but Pi integration remains shallow) vs small guard/context/telemetry set(useful and bounded). 선택은 small first-party set.
-6. Tests-first: gate bypass denial, command guard denial, readonly ticket context, pinned manifest tests 를 먼저 실패시킨다.
+```powershell
+npm test --workspace sidecars/moa-pi-host
+cargo test --manifest-path src-tauri\Cargo.toml pi_native_extensions
+rg -n "moa-tool-guard|moa-review-gate|moa-ticket-context|moa-lane-telemetry|mutation owner|CodexAdversarialXHigh" sidecars src-tauri/src TICKETS
+```
+
+## Alternatives
+
+1. No first-party extensions
+   - Pros: less maintenance.
+   - Cons: Pi integration remains generic and less safe.
+2. First-party guard/review/context extensions (선택)
+   - Pros: makes Pi extension power align with MoA policy.
+   - Cons: extension API version drift to maintain.
+3. Allow community extensions directly
+   - Pros: fastest ecosystem adoption.
+   - Cons: high bypass/supply-chain risk.
+
+## Tests-first
+
+Failing tests first: guard blocks peer command, review gate cannot be replaced, ticket context read-only, telemetry redaction, mutation owner setting remains off by default.
+
+## Paste-ready prompt
+
+```text
+[세션 부트]
+- Prompt kind: Codex Desktop manual lead ticket session
+- repo: D:\moa-desktop
+- branch: codex/T15g-moa-native-pi-extensions
+- worktree required
+
+[Goal]
+MoA first-party Pi extensions 를 구현해 Pi runtime 을 MoA policy 와 연결한다.
+
+[NEVER]
+guard bypass, Codex gate replacement, default mutation owner, third-party as first-party 금지.
+
+[Validation]
+npm test --workspace sidecars/moa-pi-host
+cargo test --manifest-path src-tauri\Cargo.toml pi_native_extensions
+
+[작업 완료 시]
+extension list, safety tests, mutation-owner opt-in prerequisites 를 보고한다.
+```

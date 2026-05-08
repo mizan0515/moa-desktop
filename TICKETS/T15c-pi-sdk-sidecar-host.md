@@ -32,27 +32,59 @@ Node sidecar `moa-pi-host` 에서 `@earendil-works/pi-coding-agent` SDK 를 직�
 
 ## Read-only
 
-- T15b RPC event vocabulary
-- T13 PolicyPack/CommandGuard
-- package manifests outside sidecar scope
+- `src-tauri/src/process/*`, `src-tauri/src/policy/*`, `src-tauri/src/safety/*`
+- `src-tauri/tauri.conf.json` until allowlist implementation is explicit in this ticket
 
 ## NEVER 영역
 
-- root `package.json`/lockfile 무관 변경
-- deprecated `@mariozechner/pi-coding-agent` import
-- arbitrary filesystem resource loader
-- sidecar-origin peer AI command execution
-- package install/update without T15d policy
+- Third-party Pi package auto install 금지.
+- Project-local `.pi/settings.json` auto load/install 금지.
+- Sidecar 가 Claude/Codex executable 을 직접 호출하게 하지 않는다.
+- Pi SDK host 가 MoA journal/ResumePacket 을 대체하지 않는다.
 
-## Worker prompt 6 mandatory fields
+## Validation cmd
 
-1. Success criteria: sidecar skeleton, SDK imports, IPC correlation, approved resource roots, bounded/redacted logs, packaging note.
-2. NEVER 영역: root manifest churn, deprecated package, arbitrary resource loader, peer command execution, untrusted package install/update.
-3. Validation cmd:
-   ```powershell
-   cargo test --manifest-path src-tauri\Cargo.toml pi_sidecar
-   npm test -- --run moa-pi-host
-   ```
-4. Files + lines: this ticket Success criteria, `DESIGN.md` Pi Runtime Adapter, T15b event protocol.
-5. Alternatives 2개 + pros/cons + 선택 근거: JSONL sidecar IPC(consistent with ProcessRunner, easier logs) vs named pipe/local socket(richer but more packaging complexity). 선택은 JSONL unless perf/security test proves insufficient.
-6. Tests-first: sidecar IPC contract, redaction, approved resource root denial, command correlation tests 를 먼저 실패시킨다.
+```powershell
+npm test --workspace sidecars/moa-pi-host
+cargo test --manifest-path src-tauri\Cargo.toml pi_sidecar
+rg -n "@earendil-works/pi-coding-agent|createAgentSession|DefaultResourceLoader|createEventBus|ModelRegistry|SessionManager|moa-pi-host" sidecars src-tauri docs
+```
+
+## Alternatives
+
+1. Keep Rust-only RPC path
+   - Pros: no Node packaging.
+   - Cons: custom UI/package/session APIs remain constrained.
+2. Node sidecar SDK host (선택)
+   - Pros: official SDK surface, full extension/custom UI control.
+   - Cons: packaging/signing/versioning overhead.
+3. Frontend direct SDK
+   - Pros: UI integration easy.
+   - Cons: browser/Tauri frontend should not own agent runtime or filesystem/tool permissions.
+
+## Tests-first
+
+Define IPC contract tests with a fake SDK host before real SDK wiring: command correlation, abort, model switch, extension reload denied while mutation lock is active.
+
+## Paste-ready prompt
+
+```text
+[세션 부트]
+- Prompt kind: Codex Desktop manual lead ticket session
+- repo: D:\moa-desktop
+- branch: codex/T15c-pi-sdk-sidecar-host
+- worktree required
+
+[Goal]
+`moa-pi-host` Node sidecar 를 추가해 Pi SDK 기반 runtime host 를 만든다.
+
+[NEVER]
+package auto install, project-local package trust, peer AI command, frontend-owned SDK runtime 금지.
+
+[Validation]
+npm test --workspace sidecars/moa-pi-host
+cargo test --manifest-path src-tauri\Cargo.toml pi_sidecar
+
+[작업 완료 시]
+IPC protocol, packaging limitations, T15d/e/f handoff 를 보고한다.
+```

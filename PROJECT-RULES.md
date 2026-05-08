@@ -7,7 +7,7 @@
 - [PLAN.md](PLAN.md) — 구현 phase·F1-F6 critical fixes·Automation Contract·ticket dependency graph
 - [synthesis.md](synthesis.md) — Claude+Codex first-pass 종합본 (참조용)
 - [analysis-claude.md](analysis-claude.md) — Claude first-pass 원본 (참조용)
-- [TICKETS/](TICKETS/) — 12 paste-ready 작업 티켓 (T0-T9 + TINTEGRATE) + v1.5 prequel (T13 EPIC) + v1.5 본체 (T10/T11/T12) + conversational mode pending (T14) + Pi HarnessRuntime EPIC (T15/T15a-T15g/T15INTEGRATE) + Harness Marketplace (T16)
+- [TICKETS/](TICKETS/) — paste-ready 작업 티켓 (T0-T9 + TINTEGRATE) + v1.5 prequel (T13 EPIC) + v1.5/v1.6 본체 (T15 Pi Runtime, T10/T11/T12 Pi-aware multi-ticket, T14 conversational with Pi, T16 equipment profiles, T15INTEGRATE)
 
 ## 글로벌 권위 (`~/.claude/`)
 

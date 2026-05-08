@@ -8,7 +8,7 @@ Claude Code + Codex CLI를 sibling worker로 실행하는 **별도 데스크탑 
 MoA Desktop (parent orchestrator)
   ├─ Claude Worker (claude -p ...)
   ├─ Codex Worker (codex exec ...)
-  ├─ Pi Runtime (pi harness; parent-owned)
+  ├─ Pi Runtime (pi --mode rpc / moa-pi-host sidecar; parent-owned)
   ├─ Orchestrator (Flow A/B/C/D 판단)
   ├─ Lock Manager (mutation owner: none|claude|codex|pi; pi off by default)
   ├─ Diff Gate (순차 수정 시 최신 재확인)

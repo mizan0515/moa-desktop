@@ -30,25 +30,66 @@ GitHub: #44 (https://github.com/mizan0515/moa-desktop/issues/44)
 
 - `src-tauri/src/harness_profiles/*.rs`
 - `src-tauri/tests/harness_profiles_*.rs`
-- `src/components/HarnessProfilePanel.tsx`
+- `src/components/HarnessMarketplace.tsx`
+- `src/components/EquipmentProfilePicker.tsx`
 - `src/lib/harnessProfiles.ts`
+
+## Read-only
+
+- T13 settings/policy
+- T15 Pi runtime/package/session APIs
+- T10/T11 runtimeKind schema
 
 ## NEVER 영역
 
-- mandatory `CodexAdversarialXHigh` disable
-- active mutation turn 에 destructive profile 즉시 적용
-- untrusted extension pack activation
-- profile 이 T13/T15 safety policy 보다 높은 권한 획득
+- profile 로 mandatory `CodexAdversarialXHigh` gate 를 끄지 않는다.
+- untrusted Pi package/extension pack 을 profile 에 자동 활성화하지 않는다.
+- active mutation lock 중 runtime/model/toolset 을 바꾸지 않는다.
+- profile 선택이 worker nested peer-call 을 허용하지 않는다.
 
-## Worker prompt 6 mandatory fields
+## Validation cmd
 
-1. Success criteria: schema, built-ins, boundary application, destructive confirm, mandatory gate immutable, trusted extension packs, budget/safety UI.
-2. NEVER 영역: gate disable, active mutation destructive apply, untrusted extension pack, policy privilege escalation.
-3. Validation cmd:
-   ```powershell
-   cargo test --manifest-path src-tauri\Cargo.toml harness_profiles
-   npm test -- --run HarnessProfilePanel
-   ```
-4. Files + lines: this ticket Success criteria, T15 package/session/profile invariants, T13 policy/settings lifecycle.
-5. Alternatives 2개 + pros/cons + 선택 근거: raw settings editor(fast but unsafe/opaque) vs curated equipment profiles(clear and policy-aware). 선택은 curated profiles.
-6. Tests-first: mandatory gate immutable, next-boundary application, untrusted extension pack denial, destructive confirm tests 를 먼저 실패시킨다.
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml harness_profiles
+npm test -- --run "HarnessMarketplace|EquipmentProfile"
+rg -n "HarnessMarketplace|EquipmentProfile|CodexAdversarialXHigh|runtimeMix|extensionPacks|safetyLevel" src-tauri/src src TICKETS DESIGN.md PLAN.md
+```
+
+## Alternatives
+
+1. Settings-only toggles
+   - Pros: low UI cost.
+   - Cons: hard for users to reason about equipment mix.
+2. Equipment profiles (선택)
+   - Pros: preserves workflow while making runtime/model/tool choices explicit.
+   - Cons: needs profile migration and policy validation.
+3. Marketplace-first package browser
+   - Pros: attractive Pi UX.
+   - Cons: too risky before trust/policy is mature.
+
+## Tests-first
+
+Failing tests first: mandatory gate cannot be disabled, untrusted extension pack rejected, active mutation lock blocks profile change, profile migration roundtrip, budget display.
+
+## Paste-ready prompt
+
+```text
+[세션 부트]
+- Prompt kind: Codex Desktop manual lead ticket session
+- repo: D:\moa-desktop
+- branch: codex/T16-harness-marketplace-equipment-profiles
+- worktree required
+
+[Goal]
+Harness Marketplace / Equipment Profiles UI 와 policy schema 를 구현한다.
+
+[NEVER]
+disable CodexAdversarialXHigh, auto-enable untrusted package, active mutation lock switch 금지.
+
+[Validation]
+cargo test --manifest-path src-tauri\Cargo.toml harness_profiles
+npm test -- --run "HarnessMarketplace|EquipmentProfile"
+
+[작업 완료 시]
+profile schema, built-in profiles, safety validation, migration notes 를 보고한다.
+```
