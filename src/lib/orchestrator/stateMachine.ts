@@ -40,6 +40,7 @@ export type EventKind =
   | "worker_raw"
   | "state"
   | "escalation"
+  | "safety_violation"
   | "awaiting_confirm"
   | "worktree_created"
   | "worker_finished"
@@ -177,6 +178,13 @@ async function onEvent(ev: OrchEvent): Promise<void> {
     case "escalation": {
       const reason = ((ev.payload ?? {}) as { reason?: string }).reason ?? "unknown";
       s.log.push(`! escalation: ${reason}`);
+      break;
+    }
+    case "safety_violation": {
+      const payload = (ev.payload ?? {}) as { evidence?: string; violation_kind?: string };
+      const reason = payload.evidence ?? payload.violation_kind ?? "policy violation";
+      s.log.push(`! safety violation: ${reason}`);
+      s.state = { kind: "failed", message: `safety violation: ${reason}` };
       break;
     }
     case "awaiting_confirm": {

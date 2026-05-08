@@ -187,6 +187,24 @@ pub fn slash_confirm_step(
     Ok(true)
 }
 
+#[tauri::command]
+pub fn slash_confirm_step_with_review(
+    preview: DispatchPreview,
+    step_index: usize,
+    user_confirmed: bool,
+    review_records: Vec<ReviewRunRecord>,
+    review_context: SlashReviewContext,
+) -> Result<bool, String> {
+    confirm_step_allowed(
+        &preview,
+        step_index,
+        user_confirmed,
+        &review_records,
+        Some(&review_context),
+    )?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +349,19 @@ mod tests {
     fn tauri_confirm_command_cannot_forge_review_gate() {
         let preview = dispatch_preview("/메인동기화").unwrap();
         assert!(slash_confirm_step(preview, 1, true).is_err());
+    }
+
+    #[test]
+    fn tauri_confirm_with_review_advances_review_gate() {
+        let td = tempfile::tempdir().unwrap();
+        let output_path = td.path().join("review.md");
+        std::fs::write(&output_path, "Verdict: Clean\nok").unwrap();
+        let record = complete_review_record(output_path, ReviewGate::PrCreate);
+        let preview = dispatch_preview("/메인동기화").unwrap();
+        assert!(
+            slash_confirm_step_with_review(preview, 1, true, vec![record], review_context())
+                .unwrap()
+        );
     }
 
     #[test]

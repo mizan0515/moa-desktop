@@ -177,4 +177,21 @@ describe("orchStart event ordering + sid collision (FIX-C)", () => {
     expect(orchStore.getSnapshot().sessions["orch-stray-99"]).toBeDefined();
     expect(orchStore.getSnapshot().sessions["orch-stray-99"].task).toBe("stray");
   });
+
+  it("surfaces safety violations as failed policy alerts", async () => {
+    const { orchStart, orchStore } = await import("../stateMachine");
+    const sid = await orchStart({ task: "policy", cwd: "/tmp", projectId: "p" });
+    emitFromBackend({
+      session_id: sid,
+      phase: "first-pass",
+      lane: "codex",
+      kind: "safety_violation",
+      payload: { evidence: "codex exec" },
+    });
+    await Promise.resolve();
+    const session = orchStore.getSnapshot().sessions[sid];
+    expect(session.state.kind).toBe("failed");
+    expect(session.state.message).toContain("codex exec");
+    expect(session.log.some((line) => line.includes("safety violation"))).toBe(true);
+  });
 });

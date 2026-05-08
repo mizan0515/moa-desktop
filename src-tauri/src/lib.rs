@@ -70,6 +70,7 @@ pub fn run() {
             settings::settings_save,
             commands::slash_dispatch_preview,
             commands::slash_confirm_step,
+            commands::slash_confirm_step_with_review,
             safety::command_guard::worker_command_guard_check,
             lifecycle::export_resume_packet,
             lifecycle::import_resume_packet,

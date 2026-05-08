@@ -1596,6 +1596,12 @@ async fn run_mutation_phase(
             n
         }
         Lane::Codex => {
+            if !start.mock_mode {
+                return Err(
+                    "codex mutation blocked: bypass mode needs a worker-source pre-execution command broker"
+                        .into(),
+                );
+            }
             let adapter = deps.codex(start.mock_mode);
             let req = crate::adapters::codex::MutationRequest {
                 task: start.task.clone(),
