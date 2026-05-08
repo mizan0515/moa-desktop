@@ -25,6 +25,11 @@ pub fn remember_review_run(record: ReviewRunRecord) -> Result<String, String> {
     remember_review_run_in_dir(record, default_review_audit_dir())
 }
 
+#[tauri::command]
+pub fn review_remember_run(record: ReviewRunRecord) -> Result<String, String> {
+    remember_review_run(record)
+}
+
 fn remember_review_run_in_dir(
     record: ReviewRunRecord,
     audit_dir: PathBuf,
@@ -34,7 +39,7 @@ fn remember_review_run_in_dir(
     }
     let id = REVIEW_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
     let token = review_token(&record, id)?;
-    persist_review_run_audit(&audit_dir, &token, &record)?;
+    persist_review_run_audit(&audit_dir, &token, id, &record)?;
     review_store()
         .lock()
         .map_err(|_| "review store poisoned".to_string())?
@@ -72,6 +77,7 @@ fn review_records_for_tokens_in_dir(
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct ReviewRunAuditEntry {
     token: String,
+    counter: u64,
     journal_event: String,
     lane_result_recorded: bool,
     resume_packet_recorded: bool,
@@ -91,6 +97,7 @@ fn review_token(record: &ReviewRunRecord, counter: u64) -> Result<String, String
 fn persist_review_run_audit(
     audit_dir: &Path,
     token: &str,
+    counter: u64,
     record: &ReviewRunRecord,
 ) -> Result<(), String> {
     fs::create_dir_all(audit_dir).map_err(|e| format!("review audit mkdir: {e}"))?;
@@ -101,6 +108,7 @@ fn persist_review_run_audit(
 
     let entry = ReviewRunAuditEntry {
         token: token.into(),
+        counter,
         journal_event: "review-run-recorded".into(),
         lane_result_recorded: true,
         resume_packet_recorded: true,
@@ -145,7 +153,8 @@ fn load_persisted_review_record(
     for line in text.lines().rev() {
         let entry: ReviewRunAuditEntry =
             serde_json::from_str(line).map_err(|e| format!("review audit parse: {e}"))?;
-        if entry.token == token {
+        let expected = review_token(&entry.record, entry.counter)?;
+        if entry.token == token && expected == token {
             return Ok(Some(entry.record));
         }
     }
@@ -544,7 +553,7 @@ mod tests {
         let output_path = td.path().join("review.md");
         std::fs::write(&output_path, "Verdict: Clean\nok").unwrap();
         let record = complete_review_record(output_path, ReviewGate::PrCreate);
-        let token = remember_review_run(record).unwrap();
+        let token = review_remember_run(record).unwrap();
         let preview = dispatch_preview("/메인동기화").unwrap();
         assert!(
             slash_confirm_step_with_review(preview, 1, true, vec![token], review_context())
@@ -591,6 +600,27 @@ mod tests {
             .join("reports")
             .join(format!("{token}.md"))
             .exists());
+    }
+
+    #[test]
+    fn durable_review_audit_rejects_tampered_records_with_copied_token() {
+        let td = tempfile::tempdir().unwrap();
+        let audit_dir = td.path().join("audit");
+        let output_path = td.path().join("review.md");
+        std::fs::write(&output_path, "Verdict: Clean\nok").unwrap();
+        let record = complete_review_record(output_path, ReviewGate::PrCreate);
+        let token = remember_review_run_in_dir(record, audit_dir.clone()).unwrap();
+
+        let path = audit_dir.join("review-runs.jsonl");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut entry: ReviewRunAuditEntry =
+            serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        entry.record.patch_hash = "tampered".into();
+        std::fs::write(&path, format!("{}\n", serde_json::to_string(&entry).unwrap())).unwrap();
+
+        assert!(load_persisted_review_record(&audit_dir, &token)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

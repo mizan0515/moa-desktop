@@ -79,6 +79,9 @@ pub fn scan_text(text: &str, context: RoleContext) -> ScanResult {
             return violation(ViolationKind::NestedAgent, pattern, context);
         }
     }
+    if contains_standalone_agent_invocation(text) {
+        return violation(ViolationKind::NestedAgent, "Agent", context);
+    }
     if matches!(context.source, ScanSource::Worker | ScanSource::Integrator) {
         for pattern in WORKER_PRIVILEGE_PATTERNS {
             if lower.contains(pattern) {
@@ -88,6 +91,58 @@ pub fn scan_text(text: &str, context: RoleContext) -> ScanResult {
     }
 
     ScanResult::Clean
+}
+
+fn contains_standalone_agent_invocation(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim();
+        if is_agent_token(trimmed) {
+            return true;
+        }
+
+        let tokens = trimmed
+            .split_whitespace()
+            .map(normalize_command_token)
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>();
+        tokens.iter().enumerate().any(|(idx, token)| {
+            is_agent_token(token)
+                && (idx == 0
+                    || tokens
+                        .get(idx.saturating_sub(1))
+                        .is_some_and(|prev| is_shell_exec_prefix(prev)))
+        })
+    })
+}
+
+fn normalize_command_token(token: &str) -> String {
+    let trimmed = token
+        .trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ','
+            )
+        })
+        .to_ascii_lowercase();
+    if is_shell_exec_prefix(&trimmed) {
+        return trimmed;
+    }
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase()
+}
+
+fn is_agent_token(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "agent" | "agent.exe" | "agent.cmd" | "agent.ps1"
+    )
+}
+
+fn is_shell_exec_prefix(token: &str) -> bool {
+    matches!(token, "/c" | "-command" | "&" | "&&" | "|" | "||" | ";")
 }
 
 fn violation(kind: ViolationKind, evidence: &str, context: RoleContext) -> ScanResult {
@@ -171,6 +226,20 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn standalone_agent_command_is_nested_agent_violation() {
+        for text in ["Agent", "cmd /c Agent", "C:\\tools\\Agent.exe"] {
+            let result = scan_text(text, ctx(ScanSource::Worker, PrimaryRole::Codex));
+            assert!(matches!(
+                result,
+                ScanResult::Violation {
+                    violation_kind: ViolationKind::NestedAgent,
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]

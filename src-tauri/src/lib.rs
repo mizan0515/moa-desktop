@@ -71,6 +71,7 @@ pub fn run() {
             commands::slash_dispatch_preview,
             commands::slash_confirm_step,
             commands::slash_confirm_step_with_review,
+            commands::review_remember_run,
             safety::command_guard::worker_command_guard_check,
             lifecycle::export_resume_packet,
             lifecycle::import_resume_packet,
