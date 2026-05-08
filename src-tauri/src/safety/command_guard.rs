@@ -128,6 +128,12 @@ fn shell_invokes_peer_ai(text: &str, deny_bare_peer_token: bool) -> bool {
                     | "claude"
                     | "claude.exe"
                     | "claude.cmd"
+                    | "agent"
+                    | "agent.exe"
+                    | "agent.cmd"
+                    | "teamcreate"
+                    | "teamcreate.exe"
+                    | "teamcreate.cmd"
             )
         })
     {
@@ -147,7 +153,19 @@ fn executable_is_peer_ai(executable: &str) -> bool {
     let file = lower.rsplit('/').next().unwrap_or(&lower);
     matches!(
         file,
-        "claude" | "claude.exe" | "claude.cmd" | "codex" | "codex.exe" | "codex.cmd" | "codex.ps1"
+        "claude"
+            | "claude.exe"
+            | "claude.cmd"
+            | "codex"
+            | "codex.exe"
+            | "codex.cmd"
+            | "codex.ps1"
+            | "agent"
+            | "agent.exe"
+            | "agent.cmd"
+            | "teamcreate"
+            | "teamcreate.exe"
+            | "teamcreate.cmd"
     )
 }
 
@@ -205,6 +223,8 @@ mod tests {
             "codex",
             "codex.cmd",
             "C:/Users/x/codex.ps1",
+            "Agent",
+            "C:/Tools/TeamCreate.exe",
         ] {
             let decision =
                 WorkerCommandGuard::check(&command(exe, &["exec"], CommandSource::Worker)).unwrap();
@@ -236,6 +256,8 @@ mod tests {
             "powershell -Command \"& 'C:\\Tools\\claude.exe' -p review\"",
             "powershell -Command \"& 'C:\\Tools\\codex.exe'\"",
             "cmd /c claude",
+            "cmd /c Agent",
+            "powershell -Command \"& 'C:\\Tools\\TeamCreate.exe'\"",
         ] {
             let mut cmd = command("powershell", &[], CommandSource::Worker);
             cmd.shell_text = Some(shell.into());

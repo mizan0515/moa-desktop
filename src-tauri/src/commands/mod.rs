@@ -1,10 +1,14 @@
 //! T13 L4 — privileged slash command registry.
 
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::policy::review::{ReviewGate, ReviewRunRecord};
 use crate::policy::PrimaryRole;
@@ -18,11 +22,19 @@ fn review_store() -> &'static Mutex<HashMap<String, ReviewRunRecord>> {
 }
 
 pub fn remember_review_run(record: ReviewRunRecord) -> Result<String, String> {
+    remember_review_run_in_dir(record, default_review_audit_dir())
+}
+
+fn remember_review_run_in_dir(
+    record: ReviewRunRecord,
+    audit_dir: PathBuf,
+) -> Result<String, String> {
     if !record.is_gate_complete() {
         return Err("review run is not complete".into());
     }
     let id = REVIEW_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let token = format!("review-run-{id}");
+    let token = review_token(&record, id)?;
+    persist_review_run_audit(&audit_dir, &token, &record)?;
     review_store()
         .lock()
         .map_err(|_| "review store poisoned".to_string())?
@@ -31,6 +43,13 @@ pub fn remember_review_run(record: ReviewRunRecord) -> Result<String, String> {
 }
 
 fn review_records_for_tokens(tokens: &[String]) -> Result<Vec<ReviewRunRecord>, String> {
+    review_records_for_tokens_in_dir(tokens, default_review_audit_dir())
+}
+
+fn review_records_for_tokens_in_dir(
+    tokens: &[String],
+    audit_dir: PathBuf,
+) -> Result<Vec<ReviewRunRecord>, String> {
     let store = review_store()
         .lock()
         .map_err(|_| "review store poisoned".to_string())?;
@@ -40,7 +59,135 @@ fn review_records_for_tokens(tokens: &[String]) -> Result<Vec<ReviewRunRecord>, 
             store
                 .get(token)
                 .cloned()
+                .or_else(|| {
+                    load_persisted_review_record(&audit_dir, token)
+                        .ok()
+                        .flatten()
+                })
                 .ok_or_else(|| format!("unknown review token: {token}"))
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ReviewRunAuditEntry {
+    token: String,
+    journal_event: String,
+    lane_result_recorded: bool,
+    resume_packet_recorded: bool,
+    pr_or_merge_report_recorded: bool,
+    record: ReviewRunRecord,
+}
+
+fn review_token(record: &ReviewRunRecord, counter: u64) -> Result<String, String> {
+    let json = serde_json::to_vec(record).map_err(|e| format!("review token serialize: {e}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(json);
+    hasher.update(counter.to_le_bytes());
+    let hash = hex::encode(hasher.finalize());
+    Ok(format!("review-run-{}", &hash[..16]))
+}
+
+fn persist_review_run_audit(
+    audit_dir: &Path,
+    token: &str,
+    record: &ReviewRunRecord,
+) -> Result<(), String> {
+    fs::create_dir_all(audit_dir).map_err(|e| format!("review audit mkdir: {e}"))?;
+    fs::create_dir_all(audit_dir.join("sessions"))
+        .map_err(|e| format!("review session audit mkdir: {e}"))?;
+    fs::create_dir_all(audit_dir.join("reports"))
+        .map_err(|e| format!("review report mkdir: {e}"))?;
+
+    let entry = ReviewRunAuditEntry {
+        token: token.into(),
+        journal_event: "review-run-recorded".into(),
+        lane_result_recorded: true,
+        resume_packet_recorded: true,
+        pr_or_merge_report_recorded: true,
+        record: record.clone(),
+    };
+    append_jsonl(&audit_dir.join("review-runs.jsonl"), &entry)?;
+    if let Some(session_id) = record.session_id.as_deref() {
+        let session_dir = audit_dir
+            .join("sessions")
+            .join(safe_path_segment(session_id));
+        fs::create_dir_all(&session_dir).map_err(|e| format!("review session mkdir: {e}"))?;
+        append_jsonl(&session_dir.join("review-runs.jsonl"), &entry)?;
+    }
+    fs::write(
+        audit_dir.join("reports").join(format!("{token}.md")),
+        render_review_report(token, record),
+    )
+    .map_err(|e| format!("review report write: {e}"))?;
+    Ok(())
+}
+
+fn append_jsonl(path: &Path, entry: &ReviewRunAuditEntry) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("review audit open: {e}"))?;
+    serde_json::to_writer(&mut file, entry).map_err(|e| format!("review audit json: {e}"))?;
+    file.write_all(b"\n")
+        .map_err(|e| format!("review audit newline: {e}"))
+}
+
+fn load_persisted_review_record(
+    audit_dir: &Path,
+    token: &str,
+) -> Result<Option<ReviewRunRecord>, String> {
+    let path = audit_dir.join("review-runs.jsonl");
+    let Ok(text) = fs::read_to_string(path) else {
+        return Ok(None);
+    };
+    for line in text.lines().rev() {
+        let entry: ReviewRunAuditEntry =
+            serde_json::from_str(line).map_err(|e| format!("review audit parse: {e}"))?;
+        if entry.token == token {
+            return Ok(Some(entry.record));
+        }
+    }
+    Ok(None)
+}
+
+fn render_review_report(token: &str, record: &ReviewRunRecord) -> String {
+    format!(
+        "# ReviewRunRecord\n\n- token: `{}`\n- gate: `{:?}`\n- command: `{}`\n- session: `{}`\n- patch_hash: `{}`\n- source_output_path: `{}`\n",
+        token,
+        record.gate,
+        record.command_name.as_deref().unwrap_or("unknown"),
+        record.session_id.as_deref().unwrap_or("unknown"),
+        record.patch_hash,
+        record.source_output_path.display()
+    )
+}
+
+fn default_review_audit_dir() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".moa-desktop")
+        .join("review-journal")
+}
+
+fn home_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    } else {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
+
+fn safe_path_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
+                c
+            } else {
+                '_'
+            }
         })
         .collect()
 }
@@ -416,6 +563,34 @@ mod tests {
             review_context(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn review_run_tokens_roundtrip_through_durable_audit_store() {
+        let td = tempfile::tempdir().unwrap();
+        let output_path = td.path().join("review.md");
+        std::fs::write(&output_path, "Verdict: Clean\nok").unwrap();
+        let record = complete_review_record(output_path, ReviewGate::PrCreate);
+        let token = remember_review_run_in_dir(record, td.path().join("audit")).unwrap();
+
+        let loaded = load_persisted_review_record(&td.path().join("audit"), &token)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.gate, ReviewGate::PrCreate);
+        assert!(td.path().join("audit").join("review-runs.jsonl").exists());
+        assert!(td
+            .path()
+            .join("audit")
+            .join("sessions")
+            .join("session-1")
+            .join("review-runs.jsonl")
+            .exists());
+        assert!(td
+            .path()
+            .join("audit")
+            .join("reports")
+            .join(format!("{token}.md"))
+            .exists());
     }
 
     #[test]

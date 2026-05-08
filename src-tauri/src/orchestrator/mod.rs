@@ -1055,7 +1055,7 @@ async fn run_adversarial_loop(
             Some(serde_json::json!({ "round": round })),
         );
 
-        let reviewer = policy.default_reviewer();
+        let reviewer = adversarial::default_reviewer(policy.synthesizer);
         let prompt_body =
             adversarial::render_prompt(&start.task, synthesis_json, round, MAX_ADVERSARIAL_ROUNDS);
 
