@@ -1,4 +1,4 @@
-# T10 — Ticket Decomposer (`/병행티켓` 등가)
+# T10 — Pi-aware Ticket Decomposer (`/병행티켓` 등가)
 
 ## 새 Claude 창 만들기 가이드
 T7-full + T5a + T5b 통과 후 (Phase 6 v1.5 진입). worktree: T10-decomposer.
@@ -33,6 +33,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 5. **머지 순서** 출력 (T12 integrator 가 사용)
 6. **reviewGate 계획** 출력 — PR 생성 전/머지 전/통합 전/main 적용 전 lead/orchestrator-owned mandatory `CodexAdversarialXHigh` review gate 가 필요한 지점. 앱 실행 시에는 orchestrator review profile, Codex Desktop 수동 개발 시에는 lead PowerShell 별도 리뷰 프로파일과 `.moa-desktop/reviews/<stamp>.md` output capture 가 gate 증거가 될 수 있다. PrimaryRole=Codex 인 경우 ClaudeSymmetry 는 추가 검토일 뿐 `CodexAdversarialXHigh` 를 대체하지 않는다. worker 가 peer AI 를 직접 호출하는 nested peer-call 은 생성 prompt 에 넣지 않는다.
 7. UI 에 TicketBoard 컴포넌트로 표시 + 사용자 검토/수정/승인 → settings 에 저장
+8. **Pi-aware runtime metadata** 출력 — 각 ticket/lane 이 `runtimeKind: "claude" | "codex" | "pi"`, `allowedHarnesses`, `piExtensionPolicyRef` 를 명시한다. T15b 이전이면 Pi 는 `allowedHarnesses` 후보가 아니라 future capability 로만 표시한다.
 
 ## Success criteria
 - [ ] `src-tauri/src/decomposer/{prompt.rs,decompose.rs,graph.rs,mod.rs}` — prompt builder + MoA orchestrator 호출 + dependency graph 분석 + 머지 순서 결정
@@ -46,6 +47,9 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
     "tickets": [{
       "id": "T1",
       "title": "...",
+      "runtimeKind": "claude",
+      "allowedHarnesses": ["claude", "codex", "pi"],
+      "piExtensionPolicyRef": null,
       "owns": [...],
       "deps": [...],
       "sixMandatoryFields": {"successCriteria": [...], "neverAreas": [...], "validationCmd": "...", "filesAndLines": [...], "alternatives": [...], "testsFirst": true},
@@ -74,6 +78,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 - [ ] 충돌 검증: 분해 결과의 각 ticket owns 가 disjoint (집합 intersection 0), 모든 NEVER 영역에 다른 ticket 의 owns 포함, 의존 그래프에 cycle 없음 → 깨지면 사용자에 보고
 - [ ] 생성된 paste-ready worker prompt 의 [작업 완료 시] 에 "lead/orchestrator-owned mandatory `CodexAdversarialXHigh` review gate Clean 전 `pr_create`, `pr_merge`, `integrate_merge`, `main_apply` 진행 금지" 안내가 들어감.
 - [ ] 생성된 paste-ready worker prompt 의 worker 실행 영역에는 peer AI 직접 호출 패턴(`/codex:`, `claude -p`, `codex exec`, `Claude MCP`, `Codex MCP`) 이 들어가지 않음. 앱 review 는 T13 L2.5/L4 가 source=orchestrator 로 수행하고, Codex Desktop 수동 개발 review 는 lead PowerShell 에서 worker 밖 별도 프로세스로 수행한다.
+- [ ] Pi-aware amend: decomposer output 의 모든 ticket 에 `runtimeKind`, `allowedHarnesses`, `piExtensionPolicyRef` 가 있다. Pi runtime 을 선택한 ticket 은 initial scope 가 read-only/research/reviewer/conversational 인지 검증하고 mutation owner 는 T15g opt-in 전까지 reject 한다.
 - [ ] 글로벌 `/병행티켓` 출력 계약 10 섹션(현재 상태 요약, inventory, 분해 전략, 의존 그래프, 충돌 매트릭스, 진행 가이드, Phase 별 prompt, 머지 순서, Open questions, 사고 방지)을 schema 로 보존한다.
 - [ ] GitHub issue/project 등록 metadata 와 Phase 사이 행동(`PR 머지 + git pull origin main`) 이 누락되지 않는다.
 - [ ] settings 에 분해 결과 저장 (`~/.moa-desktop/decompositions/<projectId>/<timestamp>.json`)
@@ -116,15 +121,23 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 - 생성 prompt 는 `/병행티켓` 글로벌 스킬의 paste-ready 규칙(본문 코드블록, [세션 부트]~[작업 완료 시], Phase 가이드, conflict matrix, dependency graph, GitHub issue/project metadata, tests-first, Phase 사이 `PR 머지 + git pull origin main`)을 지키되, PR/merge review 는 worker 직접 호출이 아니라 lead/orchestrator-owned gate 로 표현한다.
 - 비밀 파일 access X
 
+## T15 Pi Runtime amend
+
+- `HarnessRuntimeKind = "claude" | "codex" | "pi"` 를 schema vocabulary 로 사용한다.
+- `runtimeKind` 는 preferred lane runtime 이고, `allowedHarnesses` 는 fallback 후보 목록이다.
+- `piExtensionPolicyRef` 는 T15d package/capability manifest reference 이며, 없으면 Pi extension UI/custom tool 은 disabled 상태로 생성한다.
+- Pi runtime 은 decomposer 관점에서 "장비 후보"다. workflow, review gate, dependency graph, conflict matrix 는 MoA 가 계속 소유한다.
+- generated prompt 에 Pi package install/update/hot reload 지시를 넣지 않는다. 필요한 경우 "T15d policy confirm 필요" 로만 표기한다.
+
 ## Worker prompt 6 mandatory fields
-1. Success criteria: 큰 작업 입력을 T10 schema 로 분해하고 `phaseGuide`, `inventory`, `tickets`, `conflictMatrix`, `dependencyGraph`, `mergeOrder`, `reviewGate`, `reviewRunRecords`, `mergeGuidance` 를 모두 채운다.
+1. Success criteria: 큰 작업 입력을 T10 schema 로 분해하고 `phaseGuide`, `inventory`, `tickets`, `runtimeKind`, `allowedHarnesses`, `piExtensionPolicyRef`, `conflictMatrix`, `dependencyGraph`, `mergeOrder`, `reviewGate`, `reviewRunRecords`, `mergeGuidance` 를 모두 채운다.
 2. NEVER 영역: T11/T12/T13 owned body, adapters/orchestrator/safety/git/lock/journal/synthesis/process body, 비밀 파일, worker 직접 peer 호출 패턴.
 3. Validation cmd:
    ```powershell
    cargo test --manifest-path src-tauri\Cargo.toml decomposer
    npm test -- --run TicketBoard
    ```
-4. Files + lines: `TICKETS/T10-ticket-decomposer.md` 의 Goal/Success criteria/Constraints, `C:\Users\mizan\.codex\skills\병행티켓\SKILL.md` 의 출력 계약과 paste-ready 필수 내용, `DESIGN.md` 의 policy/review gate section.
+4. Files + lines: `TICKETS/T10-ticket-decomposer.md` 의 Goal/Success criteria/Constraints/T15 amend, `C:\Users\mizan\.codex\skills\병행티켓\SKILL.md` 의 출력 계약과 paste-ready 필수 내용, `DESIGN.md` 의 policy/review gate/Pi Runtime section.
 5. Alternatives 2개 + pros/cons + 선택 근거: 단일 LLM 분해(빠르지만 owns 충돌 위험) vs MoA first-pass + deterministic validator(느리지만 conflict matrix/reviewGate 누락 방지). 선택은 MoA first-pass + deterministic validator.
 6. Tests-first: schema validator, owns disjoint/cycle 검증, nested peer-call scanner dry-run, TicketBoard render/edit test 를 먼저 실패시키고 구현한다.
 
