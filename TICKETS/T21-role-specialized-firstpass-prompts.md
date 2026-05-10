@@ -86,7 +86,7 @@ rg -n "claude_firstpass_template|codex_firstpass_template|WorkerClaim|adversaria
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -105,7 +105,7 @@ npm test -- --run "firstpass|synthesis"
 
 [작업 완료 시]
 역할 분화 내용, A/B 검증 결과, false disagreement rate 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T21): role-specialized first-pass prompts for Claude/Codex MoA diversity` (본문에 `Closes #52` 포함, push 금지)

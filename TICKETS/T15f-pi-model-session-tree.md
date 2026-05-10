@@ -110,7 +110,7 @@ Failing tests first: fork/clone lineage, compaction persistence, ResumePacket re
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -129,7 +129,7 @@ npm test -- --run PiSession
 
 [작업 완료 시]
 session mapping, compaction behavior, T14 handoff 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T15f): Pi model switch & session tree + ResumePacket mirror + compaction` (본문에 `Closes #42` 포함, push 금지)

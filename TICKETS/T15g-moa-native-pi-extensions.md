@@ -110,7 +110,7 @@ Failing tests first: guard blocks peer command, review gate cannot be replaced, 
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -129,7 +129,7 @@ cargo test --manifest-path src-tauri\Cargo.toml pi_native_extensions
 
 [작업 완료 시]
 extension list, safety tests, mutation-owner opt-in prerequisites 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T15g): MoA native Pi extensions + guard/review-gate/context/telemetry` (본문에 `Closes #43` 포함, push 금지)

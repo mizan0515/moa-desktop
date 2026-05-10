@@ -111,7 +111,7 @@ Define IPC contract tests with a fake SDK host before real SDK wiring: command c
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -130,7 +130,7 @@ cargo test --manifest-path src-tauri\Cargo.toml pi_sidecar
 
 [작업 완료 시]
 IPC protocol, packaging limitations, T15d/e/f handoff 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T15c): Pi SDK sidecar host + IPC protocol + packaging docs` (본문에 `Closes #39` 포함, push 금지)

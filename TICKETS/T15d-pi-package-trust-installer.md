@@ -113,7 +113,7 @@ Failing tests first: floating version reject, missing sha reject, project-local 
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -132,7 +132,7 @@ npm test -- --run PiPackageManager
 
 [작업 완료 시]
 trust schema, denied cases, UI confirm flow, audit fields 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T15d): Pi package trust & installer + policy schema + audit` (본문에 `Closes #40` 포함, push 금지)

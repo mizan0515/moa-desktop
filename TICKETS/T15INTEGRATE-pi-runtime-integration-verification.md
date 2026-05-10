@@ -72,7 +72,7 @@ T15b/T15c/T15d/T15e/T15f/T15g/T14/T16 completion after merge verification. Valid
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -91,7 +91,7 @@ npm test -- --run Pi
 
 [작업 완료 시]
 integration report (PASS/FAIL/UNVERIFIED per capability), follow-up issues 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T15INTEGRATE): Pi runtime integration verification report` (본문에 `Closes #45` 포함, push 금지)

@@ -111,7 +111,7 @@ Failing UI tests first: confirm/select/input happy path, denied no-capability re
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -130,7 +130,7 @@ npm test -- --run PiExtension
 
 [작업 완료 시]
 mapping table, denied cases, renderer registry policy 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T15e): Pi extension UI bridge + renderer registry + sanitization` (본문에 `Closes #41` 포함, push 금지)

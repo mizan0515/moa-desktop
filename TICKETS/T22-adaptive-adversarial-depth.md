@@ -105,7 +105,7 @@ rg -n "early.exit|depth.*heuristic|round.*loop|OpenRow.*confidence|disagreement.
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -124,7 +124,7 @@ npm test -- --run "adversarial|depth"
 
 [작업 완료 시]
 depth heuristic, A/B 검증 결과, 토큰 절감율 을 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T22): adaptive adversarial depth with rule-based heuristic` (본문에 `Closes #53` 포함, push 금지)

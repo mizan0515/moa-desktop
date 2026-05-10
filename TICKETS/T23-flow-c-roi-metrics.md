@@ -95,7 +95,7 @@ rg -n "OutcomeRecord|cost_codex|verify.*verdict|user_accept|flow_c.*roi" src-tau
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -114,7 +114,7 @@ npm test -- --run "Outcome|Dashboard"
 
 [작업 완료 시]
 outcome schema, Codex cost 정상화 결과, dashboard 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T23): Flow C ROI metrics + outcome record + Codex cost tracking` (본문에 `Closes #54` 포함, push 금지)

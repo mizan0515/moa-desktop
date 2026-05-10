@@ -116,7 +116,7 @@ Failing tests first: mandatory gate cannot be disabled, untrusted extension pack
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -135,7 +135,7 @@ npm test -- --run "HarnessMarketplace|EquipmentProfile"
 
 [작업 완료 시]
 profile schema, built-in profiles, safety validation, migration notes 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T16): Harness Marketplace + Equipment Profiles + policy schema` (본문에 `Closes #44` 포함, push 금지)

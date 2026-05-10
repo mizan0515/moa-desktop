@@ -95,7 +95,7 @@ rg -n "SynthesisMetadata|avg_confidence|min_confidence|disagreement_count|versio
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -114,7 +114,7 @@ npm test -- --run "metadata|synthesis"
 
 [작업 완료 시]
 schema definition, fallback behavior, T22 handoff 를 보고한다.
-```
+````
 
 [작업 완료 시 — 무조건 이 순서로]
 1. commit: `feat(T25): TS→Rust structured synthesis metadata with versioned contract` (본문에 `Closes #56` 포함, push 금지)
