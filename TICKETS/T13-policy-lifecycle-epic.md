@@ -1,5 +1,36 @@
 # T13 — Policy & Session Lifecycle EPIC (v1.5 prequel, T10 진입 전 필수)
 
+GitHub: #35 (https://github.com/mizan0515/moa-desktop/issues/35)
+
+## 새 Claude 창 만들기 가이드
+T7-full 머지 + #20 AppHandle integration test 보강 후. worktree: T13-policy-lifecycle.
+
+---
+
+````
+[세션 부트]
+- repo: D:\moa-desktop
+- base branch: master (T7-full 머지 후)
+- 권장 분기: feat/T13-policy-lifecycle-epic
+- 권위: PROJECT-RULES.md, AGENTS.md, DESIGN.md, PLAN.md § 0.6
+- 운영: MoA Flow C — § 2.6 템플릿 A
+
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 T7-full commit 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)" | wc -l
+```
+- 결과 `1` 이상이면 OK — 작업 진행
+- 0 이면 **STOP — "T7-full 이 master 에 미머지" 사용자 보고**.
+- #20 AppHandle integration test 보강 여부도 확인:
+```
+cd D:\moa-desktop && gh issue view 20 --repo mizan0515/moa-desktop --json state -q .state
+```
+- `CLOSED` 면 OK. `OPEN` 이면 **경고** — T13 은 orchestrator/safety 경계를 건드리므로 #20 보강이 선행되어야 한다.
+
+[INDEPENDENT FIRST-PASS — read-only]
+````
+
 ## 배경 (2026-05-07 사용자 비전 검증 결과, 2026-05-07 글로벌 분리 반영)
 
 글로벌 `~/.claude/{CLAUDE.md, RTK.md, TOKEN-GUARD.md, KARPATHY.md, TICKET-CLOSE.md, CODEX-MCP.md}` (Hot 룰 6) + on-demand 스킬 `skills/{codex-mcp-runtime,token-guard-internals}/SKILL.md` (2) + 한국어 슬래시 7 개 (`commands/{다음세션,쉽게,진행}.md` + `skills/{메인동기화,백로그,병행통합,병행티켓}/SKILL.md`) 의 운영체계를 본 앱의 **표준 session lifecycle** 로 승격. **총 15 파일**. 사용자 결정:
@@ -43,13 +74,13 @@ gh issue view 35 --repo mizan0515/moa-desktop --json number,title,state,url
 **Success criteria**:
 - [ ] PrimaryRole 토글 후 Flow C 시작 → synthesizer/reviewer/mutation owner 모두 정확히 스왑.
 - [ ] 기존 e2e (T7-full dry-run) 양 role 모두 통과.
-- [ ] lock state machine 무영향 (`lock/manager.rs:45-47` 그대로).
+- [ ] lock state machine 무영향 (`src-tauri/src/lock/manager.rs` state machine 그대로, preflight `rg` 로 정확한 줄 재확인).
 - [ ] PrimaryRole 변경 시 진행중 세션 영향 X (다음 세션부터 적용 — UI 명시).
 - [ ] 단위 테스트: `policy::tests` — Flow A/B/C/D × 양 PrimaryRole = 8 케이스 mutation_owner / synthesizer / reviewer 검증.
 
 ### L2 — SafetyPolicy + WorkerCommandGuard + Output Scanner (role-aware)
 
-**목표**: [DESIGN.md:90-92](../DESIGN.md) 의 block list 코드화. **role-aware**: PrimaryRole 받아 정상 orchestration 문구 vs 워커 peer-call 위반 구분. 출력 스캐너는 2차 방어이며, worker context 에서는 process spawn/tool command 실행 **전** peer-recursion 을 차단한다.
+**목표**: `DESIGN.md` 의 "자동 중단 조건" block list 코드화 (현재 85-91줄 부근, preflight `rg` 로 재확인). **role-aware**: PrimaryRole 받아 정상 orchestration 문구 vs 워커 peer-call 위반 구분. 출력 스캐너는 2차 방어이며, worker context 에서는 process spawn/tool command 실행 **전** peer-recursion 을 차단한다.
 
 **파일**:
 - `src-tauri/src/safety/scanner.rs` (신규) — block list regex + role context input + `ScanResult { Clean | Violation { kind, evidence, role_context } }`.
@@ -61,7 +92,7 @@ gh issue view 35 --repo mizan0515/moa-desktop --json number,title,state,url
   3. Integrator / gh helper output (T12 진입 전 hook).
   4. UI 가 표시 직전 (final filter).
 
-**Block list (DESIGN.md:91-92 + adversarial 보강)**:
+**Block list (DESIGN.md "자동 중단 조건" block, preflight rg 로 재확인 + adversarial 보강)**:
 - 양방향 peer-call 패턴: `/codex:`, `claude -p`, `codex exec`, `Claude MCP`, `Codex MCP`, `claude_code_peer`, `TeamCreate`, `Agent`, `call Codex`, `call Claude`, `ask another AI`, `run another agent`.
 - Role-aware 예외: orchestrator 자체가 워커 spawn 하는 정상 메시지 ("Spawning Claude worker for first-pass…") 는 source=orchestrator 일 때만 통과. source=worker 일 때는 차단.
 - Pre-execution 예외 없음: source=worker 이면 `claude`, `codex`, `/codex:*`, Claude/Codex MCP peer, `TeamCreate`, `Agent` 계열 executable/argv/shell string 은 실행 전 차단. source=orchestrator 의 정상 worker spawn 과 review gate spawn 만 command capability allowlist 로 통과.
@@ -295,7 +326,7 @@ ReviewProfile 요청에는 다음 5 가지 focus 를 포함한다:
 
 ### 5. 기존 절차
 1. phase 별 commit 5 개 (L1~L5 각각 별도 commit, push 금지).
-2. 최종 머지 commit: `feat(T13): policy + safety + slash registry + lifecycle prequel for v1.5`.
+2. 최종 머지 commit: `feat(T13): policy + safety + slash registry + lifecycle prequel for v1.5` (본문에 `Closes #35` 포함, push 금지).
 3. PLAN.md § 0.6 amend (이미 본 ticket 진입 전에 작성).
 4. AGENTS.md amend (PrimaryRole 명시).
 5. **GitHub 카드 close**: `node ~/.claude/scripts/gh-tickets.mjs complete D:\moa-desktop 35`.
