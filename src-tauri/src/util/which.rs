@@ -73,7 +73,9 @@ fn codex_native_exe_in(
 
     if let Some(path_env) = path_env {
         for dir in std::env::split_paths(path_env) {
-            candidates.push(dir.join("codex.exe"));
+            if dir.is_absolute() {
+                candidates.push(dir.join("codex.exe"));
+            }
         }
     }
 
@@ -427,5 +429,21 @@ mod tests {
         .expect("native codex");
 
         assert_eq!(found, path_exe);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_native_rejects_relative_path_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel_dir = tmp.path().join("tools");
+        fs::create_dir_all(&rel_dir).unwrap();
+        touch(&rel_dir.join("codex.exe"));
+
+        let path = OsString::from("tools");
+        let found = codex_native_exe_in(None, None, Some(path.as_os_str()));
+        assert!(
+            found.is_none(),
+            "relative PATH entry must be rejected; got {found:?}"
+        );
     }
 }

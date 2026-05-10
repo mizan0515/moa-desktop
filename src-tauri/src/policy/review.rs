@@ -315,21 +315,23 @@ pub fn retry_formal_readonly_with_native_codex(text: &str) -> bool {
     }
 
     let lower = text.to_ascii_lowercase();
-    let mentions_powershell_wrapper = lower.contains("powershell")
-        || lower.contains("nativecommanderror")
+    let mentions_powershell_wrapper = lower.contains("nativecommanderror")
         || lower.contains("codex.ps1");
-    let mentions_startup_plugin_sync = lower.contains("remote plugin")
-        || lower.contains("plugin sync")
-        || lower.contains("plugin");
+    let mentions_startup_plugin_sync =
+        lower.contains("remote plugin") || lower.contains("plugin sync");
     let mentions_403 = lower.contains(" 403")
         || lower.contains("403 ")
         || lower.contains("statuscode: 403")
         || lower.contains("status code 403")
         || lower.contains("http 403");
+    let has_model_turn = lower.contains("thread.started")
+        || lower.contains("turn.started")
+        || lower.contains("\"type\":\"response\"");
 
     mentions_powershell_wrapper
         && mentions_startup_plugin_sync
         && mentions_403
+        && !has_model_turn
         && !controlled_bypass_allowed(text)
 }
 
@@ -456,6 +458,24 @@ mod tests {
             classify_failed_readonly_review(
                 "Verdict: ReviewRunError\nVerdict: ReviewRunError\nPowerShell codex.ps1 plugin sync 403"
             ),
+            FailedReadonlyReviewAction::FailClosed
+        );
+    }
+
+    #[test]
+    fn plugin_403_during_model_turn_is_not_retryable() {
+        let text = "Verdict: ReviewRunError\nNativeCommandError\ncodex.ps1 remote plugin sync 403\n{\"type\":\"response\",\"id\":\"r1\"}\nturn.started";
+        assert_eq!(
+            classify_failed_readonly_review(text),
+            FailedReadonlyReviewAction::FailClosed
+        );
+    }
+
+    #[test]
+    fn generic_plugin_mention_without_sync_is_not_retryable() {
+        let text = "Verdict: ReviewRunError\nNativeCommandError\nplugin authorization failed 403";
+        assert_eq!(
+            classify_failed_readonly_review(text),
             FailedReadonlyReviewAction::FailClosed
         );
     }
