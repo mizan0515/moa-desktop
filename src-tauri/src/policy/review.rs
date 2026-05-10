@@ -287,6 +287,53 @@ pub fn controlled_bypass_allowed(failed_attempt_text: &str) -> bool {
         && failed_attempt_text.contains("blocked by policy")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailedReadonlyReviewAction {
+    RetryFormalReadonlyWithNativeCodex,
+    ControlledBypassAllowed,
+    FailClosed,
+}
+
+pub fn classify_failed_readonly_review(text: &str) -> FailedReadonlyReviewAction {
+    if controlled_bypass_allowed(text) {
+        return FailedReadonlyReviewAction::ControlledBypassAllowed;
+    }
+    if retry_formal_readonly_with_native_codex(text) {
+        return FailedReadonlyReviewAction::RetryFormalReadonlyWithNativeCodex;
+    }
+    FailedReadonlyReviewAction::FailClosed
+}
+
+pub fn retry_formal_readonly_with_native_codex(text: &str) -> bool {
+    if text
+        .lines()
+        .filter(|line| line.trim() == "Verdict: ReviewRunError")
+        .count()
+        != 1
+    {
+        return false;
+    }
+
+    let lower = text.to_ascii_lowercase();
+    let mentions_powershell_wrapper = lower.contains("nativecommanderror")
+        || lower.contains("codex.ps1");
+    let mentions_startup_plugin_sync =
+        lower.contains("remote plugin") || lower.contains("plugin sync");
+    let mentions_403 = lower.contains(" 403")
+        || lower.contains("403 ")
+        || lower.contains("statuscode: 403")
+        || lower.contains("status code 403")
+        || lower.contains("http 403");
+    let has_model_turn =
+        lower.contains("turn.started") || lower.contains("\"type\":\"response\"");
+
+    mentions_powershell_wrapper
+        && mentions_startup_plugin_sync
+        && mentions_403
+        && !has_model_turn
+        && !controlled_bypass_allowed(text)
+}
+
 fn exact_clean_evidence(text: &str) -> bool {
     verdict_line_count(text) == 1 && clean_verdict_line_count(text) == 1
 }
@@ -388,6 +435,57 @@ mod tests {
             "Verdict: ReviewRunError\nblocked by policy"
         ));
         assert!(!controlled_bypass_allowed("Verdict: ReviewRunError\nVerdict: ReviewRunError\nENV_BLOCKED\nWindowsApps\npwsh.exe\nblocked by policy"));
+    }
+
+    #[test]
+    fn plugin_sync_403_powershell_wrapper_failure_retries_formal_readonly_not_bypass() {
+        let text = "Verdict: ReviewRunError\nPowerShell NativeCommandError\ncodex.ps1 startup stderr: remote plugin sync failed with HTTP 403";
+        assert_eq!(
+            classify_failed_readonly_review(text),
+            FailedReadonlyReviewAction::RetryFormalReadonlyWithNativeCodex
+        );
+        assert!(!controlled_bypass_allowed(text));
+    }
+
+    #[test]
+    fn plugin_sync_retry_classifier_requires_exact_failure_shape() {
+        assert_eq!(
+            classify_failed_readonly_review("Verdict: ReviewRunError\nplugin sync 403"),
+            FailedReadonlyReviewAction::FailClosed
+        );
+        assert_eq!(
+            classify_failed_readonly_review(
+                "Verdict: ReviewRunError\nVerdict: ReviewRunError\nPowerShell codex.ps1 plugin sync 403"
+            ),
+            FailedReadonlyReviewAction::FailClosed
+        );
+    }
+
+    #[test]
+    fn plugin_403_during_model_turn_is_not_retryable() {
+        let text = "Verdict: ReviewRunError\nNativeCommandError\ncodex.ps1 remote plugin sync 403\n{\"type\":\"response\",\"id\":\"r1\"}\nturn.started";
+        assert_eq!(
+            classify_failed_readonly_review(text),
+            FailedReadonlyReviewAction::FailClosed
+        );
+    }
+
+    #[test]
+    fn generic_plugin_mention_without_sync_is_not_retryable() {
+        let text = "Verdict: ReviewRunError\nNativeCommandError\nplugin authorization failed 403";
+        assert_eq!(
+            classify_failed_readonly_review(text),
+            FailedReadonlyReviewAction::FailClosed
+        );
+    }
+
+    #[test]
+    fn windowsapps_policy_block_still_uses_controlled_bypass_path() {
+        let text = "Verdict: ReviewRunError\nENV_BLOCKED\nWindowsApps\npwsh.exe\nblocked by policy";
+        assert_eq!(
+            classify_failed_readonly_review(text),
+            FailedReadonlyReviewAction::ControlledBypassAllowed
+        );
     }
 
     #[test]
