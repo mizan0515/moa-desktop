@@ -70,7 +70,7 @@ Create the spike matrix first with expected PASS/FAIL/UNVERIFIED rows, then run 
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -88,4 +88,4 @@ Validation cmd 를 실행하고 `spikes/T15a-pi-compatibility.md` 에 결과를 
 
 [작업 완료 시]
 PASS/FAIL/UNVERIFIED matrix, T15b/T15c scope adjustment, unresolved risks 를 보고한다.
-```
+````
