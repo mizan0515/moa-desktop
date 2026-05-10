@@ -1,5 +1,7 @@
 # T13 — Policy & Session Lifecycle EPIC (v1.5 prequel, T10 진입 전 필수)
 
+GitHub: #35 (https://github.com/mizan0515/moa-desktop/issues/35)
+
 ## 새 Claude 창 만들기 가이드
 T7-full 머지 + #20 AppHandle integration test 보강 후. worktree: T13-policy-lifecycle.
 

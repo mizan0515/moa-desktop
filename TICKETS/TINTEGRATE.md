@@ -1,5 +1,7 @@
 # TINTEGRATE — Final integration + verification + README
 
+GitHub: #13 (https://github.com/mizan0515/moa-desktop/issues/13)
+
 ## 새 Claude 창 만들기 가이드
 모든 ticket 머지 후. lead 세션에서 직접 진행 권장 (단일 세션 1개).
 

@@ -1,5 +1,7 @@
 # T25 — TS→Rust structured synthesis metadata 경계
 
+GitHub: #56 (https://github.com/mizan0515/moa-desktop/issues/56)
+
 ## Origin
 RL Conductor 논문 (arXiv:2512.04388, ICLR 2026) 적용 가능성 리서치에서 도출.
 MoA 흐름 D 종합 + Codex adversarial review (2026-05-10) 판정: **MEDIUM**.
