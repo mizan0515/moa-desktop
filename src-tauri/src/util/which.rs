@@ -426,30 +426,39 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn codex_native_rejects_relative_path_entries() {
-        // Create a temp dir with codex.exe, then reference it via a relative
-        // path rooted at cwd. The guard must reject it even though the file
-        // would be reachable via cwd resolution.
-        let tmp = tempfile::tempdir().unwrap();
-        let abs_dir = tmp.path().join("reltest");
-        fs::create_dir_all(&abs_dir).unwrap();
-        touch(&abs_dir.join("codex.exe"));
+        // Place codex.exe under a subdirectory of the test process cwd so
+        // that removing the is_absolute() guard would make the relative PATH
+        // entry resolve to a real file and the test would fail.
+        let cwd = std::env::current_dir().unwrap();
+        let rel_name = format!("_codex_relpath_test_{}", std::process::id());
+        let rel_dir = cwd.join(&rel_name);
+        fs::create_dir_all(&rel_dir).unwrap();
+        touch(&rel_dir.join("codex.exe"));
 
-        // Relative entries that Windows would resolve via cwd:
-        for rel in &[".", "tools", ".\\tools", "reltest"] {
-            let path = OsString::from(rel);
-            let found = codex_native_exe_in(None, None, Some(path.as_os_str()));
-            assert!(
-                found.is_none(),
-                "relative PATH entry {rel:?} must be rejected; got {found:?}"
-            );
+        // Guard cleanup on all exit paths.
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
         }
+        let _cleanup = Cleanup(rel_dir.clone());
 
-        // Absolute entries must be accepted:
-        let path = OsString::from(abs_dir.as_os_str());
+        // The relative entry points at a real cwd-reachable file, but
+        // is_absolute() must reject it.
+        let path = OsString::from(&rel_name);
         let found = codex_native_exe_in(None, None, Some(path.as_os_str()));
         assert!(
+            found.is_none(),
+            "relative PATH entry {rel_name:?} must be rejected; got {found:?}"
+        );
+
+        // The same directory as absolute must be accepted.
+        let abs_path = OsString::from(rel_dir.as_os_str());
+        let found = codex_native_exe_in(None, None, Some(abs_path.as_os_str()));
+        assert!(
             found.is_some(),
-            "absolute PATH entry must be accepted; abs_dir={abs_dir:?}"
+            "absolute PATH entry must be accepted; dir={rel_dir:?}"
         );
     }
 }
