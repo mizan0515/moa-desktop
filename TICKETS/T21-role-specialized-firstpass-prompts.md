@@ -9,7 +9,7 @@ MoA 흐름 D 종합 + Codex adversarial review (2026-05-10) 판정: **HIGH**.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master
@@ -21,7 +21,7 @@ MoA 흐름 D 종합 + Codex adversarial review (2026-05-10) 판정: **HIGH**.
 없음 — 현재 master 에서 즉시 가능.
 
 [INDEPENDENT FIRST-PASS — read-only]
-```
+````
 
 ## Goal
 Claude 와 Codex 의 first-pass 프롬프트를 역할 분화하여 MoA 다양성을 높인다.

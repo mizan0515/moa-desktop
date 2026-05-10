@@ -11,7 +11,7 @@ T10 착수 시 본 티켓을 참조 자료로 사용. 단독 착수 불필요.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master
@@ -23,7 +23,7 @@ T10 착수 시 본 티켓을 참조 자료로 사용. 단독 착수 불필요.
 - T10 착수 가능 상태 확인
 
 [INDEPENDENT FIRST-PASS — read-only]
-```
+````
 
 ## Goal
 T10 (ticket decomposer) 구현 시 RL Conductor의 3-list 워크플로우 표현 (model_id, subtasks, access_list)을 T10 DAG 스키마 설계에 참고.

@@ -12,7 +12,7 @@ Fugu GA + pricing 공개 후 재평가. Pi Runtime (T15) 안정화 이후.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master
@@ -25,7 +25,7 @@ Fugu GA + pricing 공개 후 재평가. Pi Runtime (T15) 안정화 이후.
 - Fugu API: GA 여부 + pricing + API 문서 확인 (현재 beta-only, pricing UNVERIFIED)
 
 [INDEPENDENT FIRST-PASS — read-only]
-```
+````
 
 ## Goal
 Sakana AI Fugu를 advisory-only 모드로 통합 검토.
