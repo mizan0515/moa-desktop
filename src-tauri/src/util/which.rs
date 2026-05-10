@@ -38,14 +38,6 @@ pub fn codex_native_exe() -> Option<PathBuf> {
     which("codex")
 }
 
-pub fn codex_fallback_name() -> &'static str {
-    if cfg!(windows) {
-        "codex.exe"
-    } else {
-        "codex"
-    }
-}
-
 #[cfg(windows)]
 fn codex_native_exe_in(
     appdata: Option<&std::ffi::OsStr>,
@@ -434,16 +426,30 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn codex_native_rejects_relative_path_entries() {
+        // Create a temp dir with codex.exe, then reference it via a relative
+        // path rooted at cwd. The guard must reject it even though the file
+        // would be reachable via cwd resolution.
         let tmp = tempfile::tempdir().unwrap();
-        let rel_dir = tmp.path().join("tools");
-        fs::create_dir_all(&rel_dir).unwrap();
-        touch(&rel_dir.join("codex.exe"));
+        let abs_dir = tmp.path().join("reltest");
+        fs::create_dir_all(&abs_dir).unwrap();
+        touch(&abs_dir.join("codex.exe"));
 
-        let path = OsString::from("tools");
+        // Relative entries that Windows would resolve via cwd:
+        for rel in &[".", "tools", ".\\tools", "reltest"] {
+            let path = OsString::from(rel);
+            let found = codex_native_exe_in(None, None, Some(path.as_os_str()));
+            assert!(
+                found.is_none(),
+                "relative PATH entry {rel:?} must be rejected; got {found:?}"
+            );
+        }
+
+        // Absolute entries must be accepted:
+        let path = OsString::from(abs_dir.as_os_str());
         let found = codex_native_exe_in(None, None, Some(path.as_os_str()));
         assert!(
-            found.is_none(),
-            "relative PATH entry must be rejected; got {found:?}"
+            found.is_some(),
+            "absolute PATH entry must be accepted; abs_dir={abs_dir:?}"
         );
     }
 }

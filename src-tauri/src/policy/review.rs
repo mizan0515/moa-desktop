@@ -324,9 +324,8 @@ pub fn retry_formal_readonly_with_native_codex(text: &str) -> bool {
         || lower.contains("statuscode: 403")
         || lower.contains("status code 403")
         || lower.contains("http 403");
-    let has_model_turn = lower.contains("thread.started")
-        || lower.contains("turn.started")
-        || lower.contains("\"type\":\"response\"");
+    let has_model_turn =
+        lower.contains("turn.started") || lower.contains("\"type\":\"response\"");
 
     mentions_powershell_wrapper
         && mentions_startup_plugin_sync
