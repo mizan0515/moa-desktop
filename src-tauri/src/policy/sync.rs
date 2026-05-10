@@ -7,6 +7,23 @@ use sha2::{Digest, Sha256};
 
 use crate::policy::pack::{SourceEntry, SourceKind, SourceRole};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    Blocker,
+    Warning,
+}
+
+pub fn missing_source_severity(kind: SourceKind) -> Severity {
+    match kind {
+        SourceKind::HotRule => Severity::Blocker,
+        SourceKind::TicketCloseRule => Severity::Blocker,
+        SourceKind::OnDemandSkill => Severity::Warning,
+        SourceKind::RuntimeHealthCheck => Severity::Warning,
+        SourceKind::RuntimeSettings => Severity::Warning,
+        SourceKind::CodexDesktopOverlay => Severity::Warning,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Drift {
     pub path: PathBuf,
@@ -75,6 +92,20 @@ mod tests {
         let drift = detect_drift(&[entry]);
         assert_eq!(drift.len(), 1);
         assert_eq!(drift[0].path, path);
+    }
+
+    #[test]
+    fn severity_blockers() {
+        assert_eq!(missing_source_severity(SourceKind::HotRule), Severity::Blocker);
+        assert_eq!(missing_source_severity(SourceKind::TicketCloseRule), Severity::Blocker);
+    }
+
+    #[test]
+    fn severity_warnings() {
+        assert_eq!(missing_source_severity(SourceKind::OnDemandSkill), Severity::Warning);
+        assert_eq!(missing_source_severity(SourceKind::RuntimeHealthCheck), Severity::Warning);
+        assert_eq!(missing_source_severity(SourceKind::RuntimeSettings), Severity::Warning);
+        assert_eq!(missing_source_severity(SourceKind::CodexDesktopOverlay), Severity::Warning);
     }
 
     #[test]
