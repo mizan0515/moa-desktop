@@ -7,7 +7,7 @@ T15d + T15e + T15f + T13 통과 후. worktree: T15g-native-ext.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master (T15d + T15e + T15f + T13 머지 후)
@@ -24,6 +24,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T15d\)|feat\(T
 - 4 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고**.
 
 [INDEPENDENT FIRST-PASS — read-only]
+````
 
 ## Goal
 

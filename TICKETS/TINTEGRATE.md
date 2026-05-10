@@ -5,7 +5,7 @@
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master (T0~T9 모두 머지 후)
@@ -22,6 +22,7 @@ cd D:\moa-desktop && git log master --oneline -200 | rg -i "feat\(T2\)|feat\(T3\
 - 13 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고** + 누락 commit 목록 작성.
 
 [INDEPENDENT FIRST-PASS — read-only]
+````
 
 ## Goal
 모든 subsystem 통합 검증 + dep/script 정리 + README + dry-run 데모.
@@ -98,4 +99,3 @@ cd D:\moa-desktop && git log master --oneline -200 | rg -i "feat\(T2\)|feat\(T3\
    - 출력에 `COMPLETED=13` 또는 `ALREADY_CLOSED=13` 가 보여야 OK.
    - 실패 시 사용자 보고 + STOP. gh 인증 오류면 `gh auth refresh -s project,read:project` 안내.
 3. 보고: verification 통과 매트릭스, follow-up 안건 (있다면), v0.1.0 release 준비 상태, **GitHub 카드 close 결과 1줄**.
-```

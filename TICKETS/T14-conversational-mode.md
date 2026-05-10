@@ -7,7 +7,7 @@ T13 L1-L5 통과 후 진입. worktree: T14-conversation.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master (T13 머지 후)
@@ -24,6 +24,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T13\)" | wc -l
 - 0 이면 **STOP — "T13 이 master 에 미머지" 사용자 보고**.
 
 [INDEPENDENT FIRST-PASS — read-only]
+````
 
 ## 배경
 

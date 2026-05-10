@@ -5,7 +5,7 @@ T7-full 머지 + #20 AppHandle integration test 보강 후. worktree: T13-policy
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master (T7-full 머지 후)
@@ -27,6 +27,7 @@ cd D:\moa-desktop && gh issue view 20 --repo mizan0515/moa-desktop --json state 
 - `CLOSED` 면 OK. `OPEN` 이면 **경고** — T13 은 orchestrator/safety 경계를 건드리므로 #20 보강이 선행되어야 한다.
 
 [INDEPENDENT FIRST-PASS — read-only]
+````
 
 ## 배경 (2026-05-07 사용자 비전 검증 결과, 2026-05-07 글로벌 분리 반영)
 

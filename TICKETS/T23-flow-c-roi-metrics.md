@@ -9,7 +9,7 @@ telemetry 파이프라인 (T9) 완성 후 착수 가능.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master
@@ -27,7 +27,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T9\)" | wc -l
 - cost.rs: Codex cost 추적 현황 (현재 $0 문제)
 
 [INDEPENDENT FIRST-PASS — read-only]
-```
+````
 
 ## Goal
 Flow C (MoA 코드 변경) 실행 후 outcome 피드백을 수집하여 파이프라인 효과 측정.

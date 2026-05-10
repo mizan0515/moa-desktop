@@ -1,5 +1,7 @@
 # T26 — Fugu API advisory-only 통합 검토
 
+GitHub: #57 (https://github.com/mizan0515/moa-desktop/issues/57)
+
 ## Origin
 RL Conductor 논문 (arXiv:2512.04388, ICLR 2026) 적용 가능성 리서치에서 도출.
 Sakana AI의 Fugu (RL Conductor 상용화) 서비스.

@@ -7,7 +7,7 @@ T15b~T15g + T14 + T16 모두 머지 후. lead 세션에서 직접 진행 권장.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master (T15b~T15g + T14 + T16 모두 머지 후)
@@ -24,6 +24,7 @@ cd D:\moa-desktop && git log master --oneline -200 | rg -i "feat\(T15b\)|feat\(T
 - 8 미만이면 **STOP — "선행 티켓이 master 에 미머지" 사용자 보고** + 누락 commit 목록 작성.
 
 [INDEPENDENT FIRST-PASS — read-only]
+````
 
 ## Goal
 

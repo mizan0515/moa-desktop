@@ -9,7 +9,7 @@ B1 (T22 적응형 깊이) 재평가 시 함께 착수. T22의 선행 조건.
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master
@@ -28,7 +28,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T3\)|feat\(T7-
   - T7-full: `rg -c "invoke\|ipc\|tauri::command" src-tauri/src/orchestrator/mod.rs` — 1 이상이면 OK
 
 [INDEPENDENT FIRST-PASS — read-only]
-```
+````
 
 ## Goal
 TS synthesis engine의 출력 → Rust orchestrator로 전달 시 structured metadata를 보존하는 versioned contract 도입.

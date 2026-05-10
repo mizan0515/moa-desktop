@@ -1,5 +1,7 @@
 # T24 — T10 DAG metadata에 Conductor 3-list 관점 반영
 
+GitHub: #55 (https://github.com/mizan0515/moa-desktop/issues/55)
+
 ## Origin
 RL Conductor 논문 (arXiv:2512.04388, ICLR 2026) 적용 가능성 리서치에서 도출.
 MoA 흐름 D 종합 + Codex adversarial review (2026-05-10) 판정: **기존 T10 포함** (T10 스키마가 이미 superset).

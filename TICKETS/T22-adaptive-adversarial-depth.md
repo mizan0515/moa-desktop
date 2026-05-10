@@ -9,7 +9,7 @@ v1.0 출시 후 실사용 데이터 축적 필요. 선행: T7-full (orchestrator
 
 ---
 
-```
+````
 [세션 부트]
 - repo: D:\moa-desktop
 - base branch: master
@@ -29,7 +29,7 @@ cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T7-full\)|feat
 - v1.0 실사용 데이터: confidence 분포, round별 verdict 패턴 (v1.0 이전이면 synthetic data 로 대체 가능)
 
 [INDEPENDENT FIRST-PASS — read-only]
-```
+````
 
 ## Goal
 현재 고정 3-round adversarial review를 task 난이도에 따라 1~3 round 동적 조절.
