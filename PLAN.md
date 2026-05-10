@@ -325,3 +325,29 @@ v1 ticket 본문에 multi-project 인프라 hook 미리 박아둔다:
 - **T9**: `Telemetry` 가 project-scoped aggregation. CostMeter UI 가 현재 탭 프로젝트의 cost 만 표시 (전역 합산 별도 탭).
 
 위 amend 는 v1 출시 일정에 영향 0 (모두 인터페이스 디자인 디테일, 구현 추가 코드 한 자리수 줄). T1 는 현재 in-flight (`feat/T1-scaffold`) 이므로 본 결정 즉시 T1 ticket 본문에 반영 필요.
+
+## 5. RL Conductor 리서치 백로그 (2026-05-10)
+
+Origin: Sakana AI RL Conductor (arXiv:2512.04388, ICLR 2026) 적용 가능성 리서치.
+MoA 흐름 D (Claude + Codex 병렬 first-pass → 5-column synthesis → adversarial review) 결과.
+
+### 발행된 티켓
+
+| ID | 제목 | 판정 | GitHub |
+|---|---|---|---|
+| **T21** | Worker별 역할 특화 first-pass 프롬프트 | HIGH | [#52](https://github.com/mizan0515/moa-desktop/issues/52) |
+| **T22** | 난이도 적응형 adversarial 깊이 (1~3 round 동적 조절) | MEDIUM | [#53](https://github.com/mizan0515/moa-desktop/issues/53) |
+| **T23** | Flow C ROI 지표 (accept/reject + test + cost 피드백 루프) | LOW | [#54](https://github.com/mizan0515/moa-desktop/issues/54) |
+| **T24** | T10 DAG metadata — Conductor 3-list 관점 반영 | T10 참조 | [#55](https://github.com/mizan0515/moa-desktop/issues/55) |
+| **T25** | TS→Rust structured synthesis metadata 경계 (versioned contract) | MEDIUM | [#56](https://github.com/mizan0515/moa-desktop/issues/56) |
+| **T26** | Fugu API advisory-only 통합 검토 | PREMATURE | [#57](https://github.com/mizan0515/moa-desktop/issues/57) |
+
+### 재평가 시점
+
+| ID | 판정 | 재평가 조건 |
+|---|---|---|
+| T22 | MEDIUM | v1.0 출시 후 실사용 데이터 축적, T25 선행 |
+| T23 | LOW | T9 telemetry 완성 + Codex cost 추적 정상화 |
+| T24 | T10 참조 | T10 착수 시 자동 참조 (별도 구현 없음) |
+| T25 | MEDIUM | T22 착수 결정 시 함께 |
+| T26 | PREMATURE | Fugu GA + pricing 공개, T15c 안정화 이후 |

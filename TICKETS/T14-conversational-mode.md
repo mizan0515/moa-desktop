@@ -2,6 +2,29 @@
 
 GitHub: #29 (https://github.com/mizan0515/moa-desktop/issues/29)
 
+## 새 Claude 창 만들기 가이드
+T13 L1-L5 통과 후 진입. worktree: T14-conversation.
+
+---
+
+```
+[세션 부트]
+- repo: D:\moa-desktop
+- base branch: master (T13 머지 후)
+- 권장 분기: feat/T14-conversational-mode
+- 권위: PROJECT-RULES.md, AGENTS.md, DESIGN.md, TICKETS/T13-policy-lifecycle-epic.md (L2 scanner, L2.5 ReviewVerdict, L4 slash dispatcher, L5 ResumePacket)
+- 운영: MoA Flow C — § 2.6 템플릿 A
+
+[의존성 self-check — claim 직후, first-pass 시작 전 무조건 실행]
+master 에 T13 commit 있는지 확인:
+```
+cd D:\moa-desktop && git log master --oneline -100 | rg -i "feat\(T13\)" | wc -l
+```
+- 결과 `1` 이상이면 OK — 작업 진행
+- 0 이면 **STOP — "T13 이 master 에 미머지" 사용자 보고**.
+
+[INDEPENDENT FIRST-PASS — read-only]
+
 ## 배경
 
 본 앱은 자동화 mode (앱 orchestrator 가 Claude/Codex sibling worker 를 spawn) 외에, 사용자가 현재 Claude Code Desktop 에서 Codex MCP 와 상호작용하듯 진행하는 conversational mode 도 지원해야 한다.
