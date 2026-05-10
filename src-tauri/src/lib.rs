@@ -93,7 +93,8 @@ fn build_orch_deps() -> Option<orchestrator::OrchestrationDeps> {
     let prompts_dir = repo_root.join("prompts").join("workers");
 
     let claude_program = util::which::which("claude").unwrap_or_else(|| PathBuf::from("claude"));
-    let codex_program = util::which::which("codex").unwrap_or_else(|| PathBuf::from("codex"));
+    let codex_program = util::which::codex_native_exe()
+        .unwrap_or_else(|| PathBuf::from(util::which::codex_fallback_name()));
 
     let claude_config =
         adapters::claude::ClaudeConfig::from_dir(claude_program, &prompts_dir, "claude-opus-4-7")

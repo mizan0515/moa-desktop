@@ -20,6 +20,78 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
     which_in(cmd, &path_env, std::env::var_os("PATHEXT").as_deref())
 }
 
+/// Locate a native Codex executable on Windows, avoiding npm `codex.cmd`
+/// shims. The Codex adapter passes the resolved path directly to
+/// `Command::new`, and the S2/S8 Windows spike established that the native
+/// binary is the stable spawn target.
+#[cfg(windows)]
+pub fn codex_native_exe() -> Option<PathBuf> {
+    codex_native_exe_in(
+        std::env::var_os("APPDATA").as_deref(),
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+#[cfg(not(windows))]
+pub fn codex_native_exe() -> Option<PathBuf> {
+    which("codex")
+}
+
+pub fn codex_fallback_name() -> &'static str {
+    if cfg!(windows) {
+        "codex.exe"
+    } else {
+        "codex"
+    }
+}
+
+#[cfg(windows)]
+fn codex_native_exe_in(
+    appdata: Option<&std::ffi::OsStr>,
+    localappdata: Option<&std::ffi::OsStr>,
+    path_env: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(appdata) = appdata {
+        candidates.push(
+            PathBuf::from(appdata)
+                .join("npm")
+                .join("node_modules")
+                .join("@openai")
+                .join("codex")
+                .join("node_modules")
+                .join("@openai")
+                .join("codex-win32-x64")
+                .join("vendor")
+                .join("x86_64-pc-windows-msvc")
+                .join("codex")
+                .join("codex.exe"),
+        );
+    }
+
+    if let Some(path_env) = path_env {
+        for dir in std::env::split_paths(path_env) {
+            candidates.push(dir.join("codex.exe"));
+        }
+    }
+
+    if let Some(localappdata) = localappdata {
+        let local = PathBuf::from(localappdata);
+        candidates.push(local.join("Programs").join("codex").join("codex.exe"));
+        candidates.push(
+            local
+                .join("OpenAI")
+                .join("Codex")
+                .join("bin")
+                .join("codex.exe"),
+        );
+    }
+
+    candidates.into_iter().find(|p| is_regular_file(p))
+}
+
 /// Same as [`which`] but takes the search PATH and PATHEXT explicitly,
 /// so callers (and tests) don't have to mutate the process environment.
 pub fn which_in(
@@ -98,7 +170,13 @@ fn candidate_extensions(cmd: &str, pathext_env: Option<&std::ffi::OsStr>) -> Vec
     let mut seen = std::collections::HashSet::new();
     let normalized: Vec<String> = exts
         .drain(..)
-        .map(|e| if e.starts_with('.') { e } else { format!(".{e}") })
+        .map(|e| {
+            if e.starts_with('.') {
+                e
+            } else {
+                format!(".{e}")
+            }
+        })
         .filter(|e| !unsafe_lc.contains(&e.to_ascii_lowercase()))
         .filter(|e| seen.insert(e.to_ascii_lowercase()))
         .collect();
@@ -256,5 +334,98 @@ mod tests {
         let path = OsString::from(tmp.path());
         let pathext = OsString::from(".EXE;.CMD");
         assert!(which_in("definitely-not-here", &path, Some(&pathext)).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_native_prefers_npm_vendor_exe_over_cmd_shim_and_app_bundle() {
+        let appdata = tempfile::tempdir().unwrap();
+        let localappdata = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+
+        touch(&appdata.path().join("npm").join("codex.cmd"));
+        let npm_native = appdata
+            .path()
+            .join("npm")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("codex")
+            .join("codex.exe");
+        touch(&npm_native);
+        touch(
+            &localappdata
+                .path()
+                .join("OpenAI")
+                .join("Codex")
+                .join("bin")
+                .join("codex.exe"),
+        );
+        touch(&path_dir.path().join("codex.exe"));
+
+        let path = std::env::join_paths([path_dir.path()]).unwrap();
+        let found = codex_native_exe_in(
+            Some(appdata.path().as_os_str()),
+            Some(localappdata.path().as_os_str()),
+            Some(path.as_os_str()),
+        )
+        .expect("native codex");
+
+        assert_eq!(found, npm_native);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_native_uses_path_exe_but_never_cmd_shim() {
+        let appdata = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+
+        touch(&appdata.path().join("npm").join("codex.cmd"));
+        touch(&path_dir.path().join("codex.ps1"));
+        let path_exe = path_dir.path().join("codex.exe");
+        touch(&path_exe);
+
+        let path = std::env::join_paths([path_dir.path()]).unwrap();
+        let found = codex_native_exe_in(
+            Some(appdata.path().as_os_str()),
+            None,
+            Some(path.as_os_str()),
+        )
+        .expect("native codex");
+
+        assert_eq!(found, path_exe);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_native_prefers_path_exe_over_app_bundle_alpha() {
+        let localappdata = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+
+        let path_exe = path_dir.path().join("codex.exe");
+        touch(&path_exe);
+        touch(
+            &localappdata
+                .path()
+                .join("OpenAI")
+                .join("Codex")
+                .join("bin")
+                .join("codex.exe"),
+        );
+
+        let path = std::env::join_paths([path_dir.path()]).unwrap();
+        let found = codex_native_exe_in(
+            None,
+            Some(localappdata.path().as_os_str()),
+            Some(path.as_os_str()),
+        )
+        .expect("native codex");
+
+        assert_eq!(found, path_exe);
     }
 }
