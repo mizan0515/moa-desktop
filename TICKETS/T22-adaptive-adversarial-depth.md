@@ -45,6 +45,13 @@ RL Conductor의 핵심 교훈: "쉬운 문제에 깊은 파이프라인 = 토큰
 - TS→Rust metadata 경계가 opaque JSON — structured 필드 전달 lossy
 - fixed 3-round ceiling이 현재 안전한 default
 
+## T25 미완료 시 fallback 동작
+T25 (TS→Rust structured metadata) 가 미완료인 상태에서 T22 를 착수할 경우:
+- **depth heuristic 입력**: TS→Rust IPC 에서 structured metadata 를 받을 수 없으므로 Rust 측에서 opaque JSON 의 `rows[]` 배열 길이, `verifiedCount`, `claudeOnlyCount`, `codexOnlyCount` 를 직접 파싱한다 (현재 orchestrator drain 에서 접근 가능한 필드).
+- **confidence 부재 보상**: `avg_confidence`, `min_confidence` 가 없으므로 `disagreement_count / total_claims` 비율만으로 heuristic 판정. 비율 ≤ 0.1 + 전원 Pass → early-exit 1 round, 비율 > 0.3 또는 Block 존재 → 3 round, 그 외 → 2 round.
+- **T25 완료 후 전환**: T25 merged 시 opaque JSON 파싱을 typed `SynthesisMetadata` 로 교체. heuristic 입력 필드가 확장되어 정밀도 향상.
+- **테스트 전략**: T25 없이 동작하는 fallback heuristic 테스트 fixture 를 별도로 유지한다.
+
 ## Success criteria
 - [ ] `OpenRow` 또는 synthesis output에 aggregate confidence / disagreement severity 메트릭 추가
 - [ ] orchestrator round loop가 early-exit 조건 지원 (e.g., round 1에서 전원 Pass + high confidence → 종료)
