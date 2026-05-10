@@ -69,7 +69,7 @@ Implement fake Pi RPC process fixtures first: valid response, streaming events, 
 
 ## Paste-ready prompt
 
-```text
+````text
 [세션 부트]
 - Prompt kind: Codex Desktop manual lead ticket session
 - repo: D:\moa-desktop
@@ -87,4 +87,4 @@ cargo test --manifest-path src-tauri\Cargo.toml pi_rpc
 
 [작업 완료 시]
 adapter API, JSONL framing guarantees, denied mutation-owner evidence, T15c handoff 를 보고한다.
-```
+````
