@@ -64,7 +64,8 @@ For a dry run:
 
 The installer writes `~/Desktop/Codex CLI (Isolated - Folder Picker).command`.
 The launcher uses AppleScript folder selection when available and falls back to a
-terminal prompt.
+terminal prompt. If Codex CLI is not discoverable from a GUI-launched shell,
+pass `--codex-path <path-to-codex>` when installing.
 
 ## Safety
 

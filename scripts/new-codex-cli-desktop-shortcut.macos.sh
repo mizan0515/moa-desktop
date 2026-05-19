@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=""
 codex_home=""
+codex_path=""
 shortcut_name="Codex CLI (Isolated - Folder Picker)"
 output_path=""
 mode="Workspace"
@@ -17,6 +18,7 @@ Usage: scripts/new-codex-cli-desktop-shortcut.macos.sh [options]
 Options:
   --repo-root PATH       Repository root. Defaults to the parent of this script.
   --codex-home PATH      Existing isolated CODEX_HOME to use.
+  --codex-path PATH      Explicit Codex CLI executable path.
   --shortcut-name NAME   Desktop shortcut name without .command.
   --output-path PATH     Exact .command file path to create.
   --mode MODE            Workspace or Automation. Default: Workspace.
@@ -31,6 +33,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo-root) repo_root="$2"; shift 2 ;;
     --codex-home) codex_home="$2"; shift 2 ;;
+    --codex-path) codex_path="$2"; shift 2 ;;
     --shortcut-name) shortcut_name="$2"; shift 2 ;;
     --output-path) output_path="$2"; shift 2 ;;
     --mode) mode="$2"; shift 2 ;;
@@ -119,6 +122,53 @@ run_guard_self_test() {
   echo "CODEX_CLI_MACOS_GUARD_SELF_TEST_PASS"
 }
 
+resolve_codex_command() {
+  local candidate
+
+  if [ -n "$codex_path" ]; then
+    candidate="$(abs_path "$codex_path")"
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    echo "Explicit Codex CLI path is not executable: $candidate" >&2
+    return 127
+  fi
+
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH"
+
+  if command -v codex >/dev/null 2>&1; then
+    command -v codex
+    return 0
+  fi
+
+  local candidates=(
+    "/opt/homebrew/bin/codex"
+    "/usr/local/bin/codex"
+    "$HOME/.npm-global/bin/codex"
+    "$HOME/.local/bin/codex"
+    "$HOME/bin/codex"
+  )
+
+  if command -v npm >/dev/null 2>&1; then
+    local npm_prefix
+    npm_prefix="$(npm prefix -g 2>/dev/null || true)"
+    if [ -n "$npm_prefix" ]; then
+      candidates+=("$npm_prefix/bin/codex")
+    fi
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "Codex CLI was not found. Install it or pass --codex-path <path-to-codex>." >&2
+  return 127
+}
+
 resolve_codex_home() {
   local candidate
   local candidates=()
@@ -154,6 +204,7 @@ if [ "$self_test_guard" -eq 1 ]; then
 fi
 
 resolved_codex_home="$(resolve_codex_home)"
+resolved_codex="$(resolve_codex_command)"
 if [ -z "$output_path" ]; then
   output_path="$HOME/Desktop/$shortcut_name.command"
 fi
@@ -170,6 +221,7 @@ if [ "$print_only" -eq 1 ]; then
   "output_path": "$output_path",
   "repo_root": "$repo_root",
   "codex_home": "$resolved_codex_home",
+  "codex": "$resolved_codex",
   "mode": "$mode"
 }
 JSON
@@ -182,6 +234,7 @@ set -euo pipefail
 
 REPO_ROOT="$repo_root"
 CODEX_HOME_PATH="$resolved_codex_home"
+CODEX_CLI_PATH="$resolved_codex"
 MODE="$mode"
 
 abs_path() {
@@ -223,6 +276,48 @@ assert_not_forbidden() {
   done
 }
 
+resolve_codex_command() {
+  local candidate
+
+  if [ -n "\$CODEX_CLI_PATH" ] && [ -x "\$CODEX_CLI_PATH" ]; then
+    printf '%s\n' "\$CODEX_CLI_PATH"
+    return 0
+  fi
+
+  export PATH="/opt/homebrew/bin:/usr/local/bin:\$HOME/.local/bin:\$HOME/bin:\$PATH"
+
+  if command -v codex >/dev/null 2>&1; then
+    command -v codex
+    return 0
+  fi
+
+  local candidates=(
+    "/opt/homebrew/bin/codex"
+    "/usr/local/bin/codex"
+    "\$HOME/.npm-global/bin/codex"
+    "\$HOME/.local/bin/codex"
+    "\$HOME/bin/codex"
+  )
+
+  if command -v npm >/dev/null 2>&1; then
+    local npm_prefix
+    npm_prefix="\$(npm prefix -g 2>/dev/null || true)"
+    if [ -n "\$npm_prefix" ]; then
+      candidates+=("\$npm_prefix/bin/codex")
+    fi
+  fi
+
+  for candidate in "\${candidates[@]}"; do
+    if [ -x "\$candidate" ]; then
+      printf '%s\n' "\$candidate"
+      return 0
+    fi
+  done
+
+  echo "Codex CLI was not found. Install it or rerun the shortcut installer with --codex-path <path-to-codex>." >&2
+  return 127
+}
+
 choose_workspace() {
   local selected=""
   if command -v osascript >/dev/null 2>&1; then
@@ -253,15 +348,18 @@ else
   approval="on-request"
 fi
 
+codex_bin="\$(resolve_codex_command)"
+
 echo
 echo "Codex CLI isolated profile launch"
 echo "  workspace:  \$workspace"
 echo "  CODEX_HOME: \$CODEX_HOME"
+echo "  codex:      \$codex_bin"
 echo "  mode:       \$MODE (\$sandbox / approval=\$approval)"
 echo "  skills:     use plain text triggers, e.g. parallel-ticket-planner, easy-briefing, ticket-review. Leading / is reserved for CLI slash commands."
 echo
 
-exec codex --enable goals --cd "\$workspace" --sandbox "\$sandbox" --ask-for-approval "\$approval" --search --no-alt-screen
+exec "\$codex_bin" --enable goals --cd "\$workspace" --sandbox "\$sandbox" --ask-for-approval "\$approval" --search --no-alt-screen
 LAUNCHER
 
 chmod +x "$output_path"
@@ -271,6 +369,7 @@ cat <<JSON
   "output_path": "$output_path",
   "repo_root": "$repo_root",
   "codex_home": "$resolved_codex_home",
+  "codex": "$resolved_codex",
   "mode": "$mode"
 }
 JSON
