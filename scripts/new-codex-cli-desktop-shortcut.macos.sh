@@ -8,6 +8,7 @@ output_path=""
 mode="Workspace"
 force=0
 print_only=0
+self_test_guard=0
 
 usage() {
   cat <<'USAGE'
@@ -21,6 +22,7 @@ Options:
   --mode MODE            Workspace or Automation. Default: Workspace.
   --force                Overwrite an existing shortcut.
   --print-command-only   Print planned values without writing a shortcut.
+  --self-test-guard      Verify forbidden workspace/CODEX_HOME path checks.
   -h, --help             Show this help.
 USAGE
 }
@@ -34,6 +36,7 @@ while [ "$#" -gt 0 ]; do
     --mode) mode="$2"; shift 2 ;;
     --force) force=1; shift ;;
     --print-command-only) print_only=1; shift ;;
+    --self-test-guard) self_test_guard=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -69,14 +72,51 @@ assert_not_forbidden() {
   home_root="$(cd "$HOME" && pwd)"
   local marker
   for marker in codex claude ssh; do
-    local forbidden="$home_root/.$marker"
+    local forbidden
+    forbidden="$(abs_path "$home_root/.$marker")"
     case "$path/" in
       "$forbidden/"*)
       echo "Refusing forbidden host-profile/credential path for $purpose: $path" >&2
-      exit 2
+      return 2
+      ;;
+    esac
+    case "$forbidden/" in
+      "$path/"*)
+      echo "Refusing workspace that contains host-profile/credential path for $purpose: $path" >&2
+      return 2
       ;;
     esac
   done
+}
+
+run_guard_self_test() {
+  local failed=0
+  local normal_project="${TMPDIR:-/tmp}/codex-cli-isolated-normal-project"
+  mkdir -p "$normal_project"
+
+  if ! assert_not_forbidden "$normal_project" "self-test normal project" >/dev/null 2>&1; then
+    echo "FAIL: normal project folder was rejected" >&2
+    failed=1
+  fi
+
+  local marker
+  for marker in codex claude ssh; do
+    if assert_not_forbidden "$HOME/.$marker" "self-test direct forbidden" >/dev/null 2>&1; then
+      echo "FAIL: direct host-profile/credential folder was accepted: $marker" >&2
+      failed=1
+    fi
+  done
+
+  if assert_not_forbidden "$HOME" "self-test containing parent" >/dev/null 2>&1; then
+    echo "FAIL: containing parent folder was accepted" >&2
+    failed=1
+  fi
+
+  if [ "$failed" -ne 0 ]; then
+    exit 1
+  fi
+
+  echo "CODEX_CLI_MACOS_GUARD_SELF_TEST_PASS"
 }
 
 resolve_codex_home() {
@@ -106,6 +146,11 @@ resolve_codex_home() {
 if [ "$mode" != "Workspace" ] && [ "$mode" != "Automation" ]; then
   echo "--mode must be Workspace or Automation" >&2
   exit 2
+fi
+
+if [ "$self_test_guard" -eq 1 ]; then
+  run_guard_self_test
+  exit 0
 fi
 
 resolved_codex_home="$(resolve_codex_home)"
@@ -166,7 +211,13 @@ assert_not_forbidden() {
     case "\$path/" in
       "\$forbidden/"*)
       echo "Refusing forbidden host-profile/credential path for \$purpose: \$path" >&2
-      exit 2
+      return 2
+      ;;
+    esac
+    case "\$forbidden/" in
+      "\$path/"*)
+      echo "Refusing workspace that contains host-profile/credential path for \$purpose: \$path" >&2
+      return 2
       ;;
     esac
   done
