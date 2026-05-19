@@ -8,3 +8,10 @@ Tauri v2 + React + TypeScript desktop app that runs Claude Code and Codex CLI as
 npm install
 npm run tauri dev
 ```
+
+## Isolated Codex CLI shortcut
+
+Use `scripts/New-CodexCliDesktopShortcut.ps1` on Windows or
+`scripts/new-codex-cli-desktop-shortcut.macos.sh` on macOS to create a desktop
+shortcut that launches Codex CLI with an isolated `CODEX_HOME` and a folder
+picker. See `docs/CODEX_CLI_ISOLATED_SHORTCUTS.md`.
